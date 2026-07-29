@@ -10,6 +10,7 @@ import java.net.http.HttpResponse;
 import java.net.http.WebSocket;
 import java.time.Duration;
 import java.util.concurrent.CompletionStage;
+import java.util.function.BiConsumer;
 
 public final class TwitchEventSubClient implements WebSocket.Listener {
 
@@ -20,6 +21,7 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
     private static final Gson GSON = new Gson();
 
     private final TwitchAuth auth;
+    private final BiConsumer<String, String> messageHandler;
 
     private final HttpClient httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
@@ -28,8 +30,9 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
 
     private final StringBuilder messageBuffer = new StringBuilder();
 
-    public TwitchEventSubClient(TwitchAuth auth) {
+    public TwitchEventSubClient(TwitchAuth auth, BiConsumer<String, String> messageHandler) {
         this.auth = auth;
+        this.messageHandler = messageHandler;
     }
 
     public void connect() {
@@ -55,6 +58,7 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
 
         if (webSocket != null) {
             webSocket.sendClose(WebSocket.NORMAL_CLOSURE, "Disconnecting");
+
             webSocket = null;
         }
     }
@@ -117,11 +121,14 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
         switch (type) {
             case "session_welcome" -> handleWelcome(root);
             case "notification" -> handleNotification(root);
+
             case "session_keepalive" -> {
-                // Connection is alive. Nothing to do.
             }
+
             case "session_reconnect" -> System.out.println("[Stream Chat Bridge] Twitch requested EventSub reconnect.");
+
             case "revocation" -> System.err.println("[Stream Chat Bridge] Twitch EventSub subscription revoked.");
+
             default -> {
             }
         }
@@ -142,7 +149,9 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
     private void createChatSubscription(String sessionId) {
         try {
             JsonObject condition = new JsonObject();
+
             condition.addProperty("broadcaster_user_id", auth.getUserId());
+
             condition.addProperty("user_id", auth.getUserId());
 
             JsonObject transport = new JsonObject();
@@ -180,7 +189,7 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
 
         JsonObject subscription = payload.getAsJsonObject("subscription");
 
-        if (subscription == null || !"channel.chat.message".equals(subscription.get("type").getAsString())) {
+        if (subscription == null || !subscription.has("type") || !"channel.chat.message".equals(subscription.get("type").getAsString())) {
             return;
         }
 
@@ -195,6 +204,10 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
         String message = event.getAsJsonObject("message").get("text").getAsString();
 
         System.out.println("[Twitch] " + username + ": " + message);
+
+        if (messageHandler != null) {
+            messageHandler.accept(username, message);
+        }
     }
 
     public boolean isConnected() {

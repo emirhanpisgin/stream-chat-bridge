@@ -1,6 +1,7 @@
 package com.kryp.streamchatbridge;
 
 import com.kryp.streamchatbridge.config.ConfigManager;
+import com.kryp.streamchatbridge.minecraft.MinecraftChatBridge;
 import com.kryp.streamchatbridge.twitch.TwitchAuth;
 import com.kryp.streamchatbridge.twitch.TwitchEventSubClient;
 import net.fabricmc.api.ClientModInitializer;
@@ -10,7 +11,8 @@ public class StreamChatBridgeClient implements ClientModInitializer {
     public static final String MOD_ID = "streamchatbridge";
 
     private static final TwitchAuth TWITCH_AUTH = new TwitchAuth();
-    private static final TwitchEventSubClient TWITCH_EVENT_SUB = new TwitchEventSubClient(TWITCH_AUTH);
+
+    private static final TwitchEventSubClient TWITCH_EVENT_SUB = new TwitchEventSubClient(TWITCH_AUTH, MinecraftChatBridge::showTwitchMessage);
 
     @Override
     public void onInitializeClient() {
