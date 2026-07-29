@@ -3,6 +3,7 @@ package com.kryp.streamchatbridge;
 import com.kryp.streamchatbridge.config.ConfigManager;
 import com.kryp.streamchatbridge.minecraft.MinecraftChatBridge;
 import com.kryp.streamchatbridge.twitch.TwitchAuth;
+import com.kryp.streamchatbridge.twitch.TwitchClient;
 import com.kryp.streamchatbridge.twitch.TwitchEventSubClient;
 import net.fabricmc.api.ClientModInitializer;
 
@@ -12,35 +13,46 @@ public class StreamChatBridgeClient implements ClientModInitializer {
 
     private static final TwitchAuth TWITCH_AUTH = new TwitchAuth();
 
+    private static final TwitchClient TWITCH_CLIENT = new TwitchClient(TWITCH_AUTH);
+
     private static final TwitchEventSubClient TWITCH_EVENT_SUB = new TwitchEventSubClient(TWITCH_AUTH, MinecraftChatBridge::showTwitchMessage);
 
     @Override
     public void onInitializeClient() {
         ConfigManager.load();
 
+        MinecraftChatBridge.registerOutgoing(TWITCH_CLIENT);
+
         System.out.println("[Stream Chat Bridge] Loaded");
 
         Thread.startVirtualThread(() -> {
             if (TWITCH_AUTH.restoreSession()) {
-                System.out.println("[Stream Chat Bridge] Twitch authenticated as: " + TWITCH_AUTH.getUsername());
-
-                TWITCH_EVENT_SUB.connect();
+                onTwitchAuthenticated();
                 return;
             }
 
             System.out.println("[Stream Chat Bridge] No Twitch account connected.");
+
             System.out.println("[Stream Chat Bridge] Starting Twitch authentication...");
 
             if (TWITCH_AUTH.authenticate()) {
-                System.out.println("[Stream Chat Bridge] Twitch authenticated as: " + TWITCH_AUTH.getUsername());
-
-                TWITCH_EVENT_SUB.connect();
+                onTwitchAuthenticated();
             }
         });
     }
 
+    private void onTwitchAuthenticated() {
+        System.out.println("[Stream Chat Bridge] Twitch authenticated as: " + TWITCH_AUTH.getUsername());
+
+        TWITCH_EVENT_SUB.connect();
+    }
+
     public static TwitchAuth getTwitchAuth() {
         return TWITCH_AUTH;
+    }
+
+    public static TwitchClient getTwitchClient() {
+        return TWITCH_CLIENT;
     }
 
     public static TwitchEventSubClient getTwitchEventSub() {
