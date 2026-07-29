@@ -17,6 +17,9 @@
   "entrypoints": {
     "main": [
       "com.kryp.streamchatbridge.StreamChatBridge"
+    ],
+    "client": [
+      "com.kryp.streamchatbridge.StreamChatBridgeClient"
     ]
   },
   "depends": {
