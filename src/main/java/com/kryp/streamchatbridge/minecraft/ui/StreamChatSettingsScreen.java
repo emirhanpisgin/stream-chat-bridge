@@ -3,6 +3,7 @@ package com.kryp.streamchatbridge.minecraft.ui;
 import com.kryp.streamchatbridge.StreamChatBridgeClient;
 import com.kryp.streamchatbridge.config.ConfigManager;
 import com.kryp.streamchatbridge.config.ModConfig;
+import com.kryp.streamchatbridge.kick.KickAuth;
 import com.kryp.streamchatbridge.minecraft.MinecraftChatBridge;
 import com.kryp.streamchatbridge.twitch.TwitchAuth;
 import com.kryp.streamchatbridge.twitch.TwitchClient;
@@ -20,14 +21,15 @@ public final class StreamChatSettingsScreen extends Screen {
 
     private final Screen parent;
 
-    private EditBox channelField;
+    private EditBox twitchChannelField;
+
+    private EditBox kickClientIdField;
+    private EditBox kickClientSecretField;
+
     private EditBox prefixField;
-    private EditBox platformField;
     private EditBox formatField;
 
-    private Button colorButton;
-
-    private int selectedColorIndex = 15;
+    private int selectedColorIndex = 16;
 
     private String statusMessage = "";
 
@@ -41,31 +43,70 @@ public final class StreamChatSettingsScreen extends Screen {
     protected void init() {
         ModConfig config = ConfigManager.get();
 
-        int contentWidth = 340;
+        KickAuth kickAuth = StreamChatBridgeClient.getKickAuth();
+
+        int contentWidth = 420;
         int left = width / 2 - contentWidth / 2;
 
-        channelField = new EditBox(font, left, 55, contentWidth, 20, Component.literal("Twitch Channel"));
+        /*
+         * Twitch
+         */
 
-        channelField.setValue(config.twitchChannel == null ? "" : config.twitchChannel);
+        twitchChannelField = new EditBox(font, left, 58, contentWidth, 20, Component.literal("Twitch Channel"));
 
-        channelField.setMaxLength(50);
-        addRenderableWidget(channelField);
+        twitchChannelField.setValue(config.twitchChannel == null ? "" : config.twitchChannel);
 
-        prefixField = new EditBox(font, left, 91, contentWidth, 20, Component.literal("Send Prefix"));
+        twitchChannelField.setMaxLength(50);
+
+        addRenderableWidget(twitchChannelField);
+
+        /*
+         * Kick
+         */
+
+        int credentialWidth = 205;
+
+        kickClientIdField = new EditBox(font, left, 103, credentialWidth, 20, Component.literal("Kick Client ID"));
+
+        kickClientIdField.setValue(kickAuth.getClientId() == null ? "" : kickAuth.getClientId());
+
+        kickClientIdField.setMaxLength(256);
+
+        addRenderableWidget(kickClientIdField);
+
+        kickClientSecretField = new EditBox(font, left + 215, 103, credentialWidth, 20, Component.literal("Kick Client Secret"));
+
+        /*
+         * Never display the stored secret.
+         *
+         * Blank means:
+         * keep the currently stored secret.
+         *
+         * If the user enters a value here, the credentials
+         * are replaced using the Client ID field + new secret.
+         */
+        kickClientSecretField.setValue("");
+        kickClientSecretField.setMaxLength(512);
+
+        addRenderableWidget(kickClientSecretField);
+
+        /*
+         * Shared outgoing settings
+         */
+
+        prefixField = new EditBox(font, left, 148, contentWidth, 20, Component.literal("Send Prefix"));
 
         prefixField.setValue(config.outgoingPrefix == null ? "!" : config.outgoingPrefix);
 
         prefixField.setMaxLength(20);
+
         addRenderableWidget(prefixField);
 
-        platformField = new EditBox(font, left, 127, contentWidth, 20, Component.literal("Platform Label"));
+        /*
+         * Incoming format
+         */
 
-        platformField.setValue(config.incomingPlatformLabel == null ? "Twitch" : config.incomingPlatformLabel);
-
-        platformField.setMaxLength(30);
-        addRenderableWidget(platformField);
-
-        formatField = new EditBox(font, left, 163, contentWidth, 20, Component.literal("Incoming Format"));
+        formatField = new EditBox(font, left, 193, contentWidth, 20, Component.literal("Incoming Format"));
 
         String format = config.incomingMessageFormat;
 
@@ -75,9 +116,14 @@ public final class StreamChatSettingsScreen extends Screen {
 
         formatField.setMaxLength(512);
         formatField.setValue(format);
+
         addRenderableWidget(formatField);
 
-        colorButton = addRenderableWidget(Button.builder(selectedColorText(), button -> {
+        /*
+         * Color insertion
+         */
+
+        addRenderableWidget(Button.builder(selectedColorText(), button -> {
             selectedColorIndex++;
 
             if (selectedColorIndex >= COLORS.length) {
@@ -87,32 +133,51 @@ public final class StreamChatSettingsScreen extends Screen {
             button.setMessage(selectedColorText());
 
             release(button);
-        }).bounds(left, 204, 220, 20).build());
+        }).bounds(left, 228, 275, 20).build());
 
         addRenderableWidget(Button.builder(Component.literal("Insert"), button -> {
             insertSelectedColor();
-            release(button);
-        }).bounds(left + 230, 204, 110, 20).build());
 
-        addRenderableWidget(Button.builder(sendToggleText(), button -> {
+            release(button);
+        }).bounds(left + 285, 228, 135, 20).build());
+
+        /*
+         * Platform send toggles
+         */
+
+        addRenderableWidget(Button.builder(twitchSendToggleText(), button -> {
             config.twitchSendEnabled = !config.twitchSendEnabled;
 
-            button.setMessage(sendToggleText());
+            button.setMessage(twitchSendToggleText());
 
             release(button);
-        }).bounds(left, 270, contentWidth, 20).build());
+        }).bounds(left, 286, 205, 20).build());
+
+        addRenderableWidget(Button.builder(kickSendToggleText(), button -> {
+            config.kickSendEnabled = !config.kickSendEnabled;
+
+            button.setMessage(kickSendToggleText());
+
+            release(button);
+        }).bounds(left + 215, 286, 205, 20).build());
+
+        /*
+         * Save / Back
+         */
 
         addRenderableWidget(Button.builder(Component.literal("Save"), button -> {
             save();
+
             release(button);
-        }).bounds(left, 300, 165, 20).build());
+        }).bounds(left, 321, 205, 20).build());
 
         addRenderableWidget(Button.builder(Component.literal("Back"), button -> {
             save();
+
             release(button);
 
             minecraft.gui.setScreen(parent);
-        }).bounds(left + 175, 300, 165, 20).build());
+        }).bounds(left + 215, 321, 205, 20).build());
     }
 
     private Component selectedColorText() {
@@ -143,6 +208,7 @@ public final class StreamChatSettingsScreen extends Screen {
         formatField.setCursorPosition(cursor + option.tag().length());
 
         formatField.setFocused(true);
+
         setFocused(formatField);
     }
 
@@ -154,22 +220,44 @@ public final class StreamChatSettingsScreen extends Screen {
         }
     }
 
-    private Component sendToggleText() {
+    private Component twitchSendToggleText() {
         return Component.literal("Minecraft → Twitch: " + (ConfigManager.get().twitchSendEnabled ? "ON" : "OFF"));
+    }
+
+    private Component kickSendToggleText() {
+        return Component.literal("Minecraft → Kick: " + (ConfigManager.get().kickSendEnabled ? "ON" : "OFF"));
     }
 
     private void save() {
         ModConfig config = ConfigManager.get();
 
-        String oldChannel = config.twitchChannel == null ? "" : config.twitchChannel.trim();
+        KickAuth kickAuth = StreamChatBridgeClient.getKickAuth();
 
-        String newChannel = channelField.getValue().trim();
+        /*
+         * Existing values
+         */
 
-        config.twitchChannel = newChannel;
+        String oldTwitchChannel = config.twitchChannel == null ? "" : config.twitchChannel.trim();
+
+        String oldKickClientId = kickAuth.getClientId() == null ? "" : kickAuth.getClientId().trim();
+
+        /*
+         * New values
+         */
+
+        String newTwitchChannel = twitchChannelField.getValue().trim();
+
+        String newKickClientId = kickClientIdField.getValue().trim();
+
+        String newKickClientSecret = kickClientSecretField.getValue().trim();
+
+        /*
+         * Save normal mod config
+         */
+
+        config.twitchChannel = newTwitchChannel;
 
         config.outgoingPrefix = prefixField.getValue();
-
-        config.incomingPlatformLabel = platformField.getValue().isBlank() ? "Twitch" : platformField.getValue();
 
         config.incomingMessageFormat = formatField.getValue().isBlank() ? MinecraftChatBridge.DEFAULT_FORMAT : formatField.getValue();
 
@@ -177,19 +265,63 @@ public final class StreamChatSettingsScreen extends Screen {
 
         statusMessage = "Saved";
 
-        if (!oldChannel.equalsIgnoreCase(newChannel)) {
-            applyChannel(newChannel);
+        /*
+         * Kick credentials are NOT stored in ModConfig.
+         *
+         * A blank secret means keep the existing credentials.
+         *
+         * Entering a secret means replace the credentials using
+         * the current Client ID field and the new secret.
+         */
+
+        if (!newKickClientSecret.isBlank()) {
+            if (newKickClientId.isBlank()) {
+                statusMessage = "Kick Client ID is required";
+
+                return;
+            }
+
+            boolean credentialsChanged = !newKickClientId.equals(oldKickClientId) || !newKickClientSecret.isBlank();
+
+            if (credentialsChanged) {
+                StreamChatBridgeClient.getKickChat().disconnect();
+
+                StreamChatBridgeClient.getKickClient().clearChannel();
+
+                kickAuth.setClientCredentials(newKickClientId, newKickClientSecret);
+
+                kickClientSecretField.setValue("");
+
+                statusMessage = "Saved — Kick credentials updated";
+            }
+        } else if (!newKickClientId.equals(oldKickClientId)) {
+            /*
+             * We cannot safely change only the Client ID because
+             * KickAuth intentionally does not expose the stored
+             * Client Secret.
+             */
+            kickClientIdField.setValue(oldKickClientId);
+
+            statusMessage = "Enter Client Secret to change Kick credentials";
+        }
+
+        /*
+         * Apply Twitch channel immediately if changed.
+         */
+
+        if (!oldTwitchChannel.equalsIgnoreCase(newTwitchChannel)) {
+            applyTwitchChannel(newTwitchChannel);
         }
     }
 
-    private void applyChannel(String channel) {
+    private void applyTwitchChannel(String channel) {
         TwitchAuth auth = StreamChatBridgeClient.getTwitchAuth();
 
         if (!auth.isAuthenticated()) {
             return;
         }
 
-        statusMessage = "Changing channel...";
+        statusMessage = "Changing Twitch channel...";
 
         Thread.startVirtualThread(() -> {
             TwitchClient twitchClient = StreamChatBridgeClient.getTwitchClient();
@@ -197,7 +329,7 @@ public final class StreamChatSettingsScreen extends Screen {
             TwitchEventSubClient eventSub = StreamChatBridgeClient.getTwitchEventSub();
 
             if (!twitchClient.setChannel(channel)) {
-                setStatus("Channel not found");
+                setStatus("Twitch channel not found");
 
                 return;
             }
@@ -223,9 +355,7 @@ public final class StreamChatSettingsScreen extends Screen {
     private Component previewComponent() {
         String format = formatField == null ? MinecraftChatBridge.DEFAULT_FORMAT : formatField.getValue();
 
-        String platform = platformField == null ? "Twitch" : platformField.getValue();
-
-        return MinecraftChatBridge.buildIncomingComponent(format, platform, "ExampleUser", "Hello!");
+        return MinecraftChatBridge.buildIncomingComponent(format, "Twitch", "ExampleUser", "Hello!");
     }
 
     @Override
@@ -239,26 +369,56 @@ public final class StreamChatSettingsScreen extends Screen {
     public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
         super.extractRenderState(graphics, mouseX, mouseY, delta);
 
-        int contentWidth = 340;
+        int contentWidth = 420;
         int left = width / 2 - contentWidth / 2;
 
         graphics.text(font, title, width / 2 - font.width(title) / 2, 18, 0xFFFFFFFF, true);
 
-        graphics.text(font, "Channel", left, 44, 0xFFAAAAAA, false);
+        /*
+         * Twitch
+         */
 
-        graphics.text(font, "Send Prefix", left, 80, 0xFFAAAAAA, false);
+        graphics.text(font, "TWITCH", left, 40, 0xFFAA55AA, false);
 
-        graphics.text(font, "Platform Label", left, 116, 0xFFAAAAAA, false);
+        graphics.text(font, "Channel", left, 47, 0xFFAAAAAA, false);
 
-        graphics.text(font, "Incoming Format", left, 152, 0xFFAAAAAA, false);
+        /*
+         * Kick
+         */
 
-        graphics.text(font, "Preview", left, 235, 0xFFAAAAAA, false);
+        graphics.text(font, "KICK APP", left, 85, 0xFF53FC18, false);
 
-        graphics.text(font, previewComponent(), left, 248, 0xFFFFFFFF, false);
+        graphics.text(font, "Client ID", left, 92, 0xFFAAAAAA, false);
+
+        graphics.text(font, "Client Secret", left + 215, 92, 0xFFAAAAAA, false);
+
+        graphics.text(font, kickAuthHint(), left, 126, 0xFF777777, false);
+
+        /*
+         * Shared
+         */
+
+        graphics.text(font, "Send Prefix", left, 137, 0xFFAAAAAA, false);
+
+        graphics.text(font, "Incoming Format", left, 182, 0xFFAAAAAA, false);
+
+        graphics.text(font, "Preview", left, 258, 0xFFAAAAAA, false);
+
+        graphics.text(font, previewComponent(), left, 271, 0xFFFFFFFF, false);
 
         if (!statusMessage.isBlank()) {
-            graphics.text(font, statusMessage, width / 2 - font.width(statusMessage) / 2, 330, 0xFFAAAAAA, false);
+            graphics.text(font, statusMessage, width / 2 - font.width(statusMessage) / 2, 355, 0xFFAAAAAA, false);
         }
+    }
+
+    private String kickAuthHint() {
+        KickAuth auth = StreamChatBridgeClient.getKickAuth();
+
+        if (auth.hasClientCredentials()) {
+            return "Client Secret: leave blank to keep current credentials";
+        }
+
+        return "Create a Kick app and enter its Client ID and Client Secret";
     }
 
     private record ColorOption(String name, String tag, ChatFormatting formatting) {

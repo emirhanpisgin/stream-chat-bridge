@@ -2,6 +2,9 @@ package com.kryp.streamchatbridge.minecraft.ui;
 
 import com.kryp.streamchatbridge.StreamChatBridgeClient;
 import com.kryp.streamchatbridge.config.ConfigManager;
+import com.kryp.streamchatbridge.kick.KickAuth;
+import com.kryp.streamchatbridge.kick.KickChatClient;
+import com.kryp.streamchatbridge.kick.KickClient;
 import com.kryp.streamchatbridge.twitch.TwitchAuth;
 import com.kryp.streamchatbridge.twitch.TwitchClient;
 import com.kryp.streamchatbridge.twitch.TwitchEventSubClient;
@@ -16,6 +19,9 @@ public final class StreamChatConfigScreen extends Screen {
 
     private String statusMessage = "";
 
+    private boolean twitchAuthenticationInProgress = false;
+    private boolean kickAuthenticationInProgress = false;
+
     public StreamChatConfigScreen(Screen parent) {
         super(Component.literal("Stream Chat Bridge"));
 
@@ -24,23 +30,80 @@ public final class StreamChatConfigScreen extends Screen {
 
     @Override
     protected void init() {
-        int contentWidth = 300;
-        int left = width / 2 - contentWidth / 2;
+        int totalWidth = 400;
+        int columnWidth = 180;
+        int gap = 40;
+
+        int left = width / 2 - totalWidth / 2;
+
+        int twitchLeft = left;
+        int kickLeft = left + columnWidth + gap;
+
+        createTwitchControls(twitchLeft, columnWidth);
+
+        createKickControls(kickLeft, columnWidth);
+
+        int bottomWidth = 300;
+        int bottomLeft = width / 2 - bottomWidth / 2;
+
+        addRenderableWidget(Button.builder(Component.literal("Settings"), button -> {
+            button.setFocused(false);
+            setFocused(null);
+
+            minecraft.gui.setScreen(new StreamChatSettingsScreen(this));
+        }).bounds(bottomLeft, 260, bottomWidth, 20).build());
+
+        addRenderableWidget(Button.builder(Component.literal("Close"), button -> {
+            button.setFocused(false);
+            setFocused(null);
+
+            minecraft.gui.setScreen(parent);
+        }).bounds(bottomLeft, 290, bottomWidth, 20).build());
+
+        StreamChatBridgeClient.getTwitchEventSub().setStateListener(this::twitchConnectionStateChanged);
+
+        StreamChatBridgeClient.getKickChat().setStateListener(this::kickConnectionStateChanged);
+    }
+
+    /*
+     * Twitch controls
+     */
+
+    private void createTwitchControls(int left, int width) {
+        TwitchAuth auth = StreamChatBridgeClient.getTwitchAuth();
 
         TwitchEventSubClient eventSub = StreamChatBridgeClient.getTwitchEventSub();
 
-        Button connectionButton = Button.builder(connectionButtonText(), button -> {
+        if (!auth.isAuthenticated()) {
+            Button loginButton = Button.builder(Component.literal(twitchAuthenticationInProgress ? "Waiting for Twitch..." : "Log in with Twitch"), button -> {
+                button.setFocused(false);
+                setFocused(null);
+
+                twitchLogin();
+            }).bounds(left, 155, width, 20).build();
+
+            loginButton.active = !twitchAuthenticationInProgress;
+
+            addRenderableWidget(loginButton);
+
+            return;
+        }
+
+        Button connectionButton = Button.builder(twitchConnectionButtonText(), button -> {
             button.setFocused(false);
             setFocused(null);
 
             TwitchEventSubClient.ConnectionState state = eventSub.getConnectionState();
 
             if (state == TwitchEventSubClient.ConnectionState.CONNECTED) {
-                reconnect();
+
+                twitchReconnect();
+
             } else if (state == TwitchEventSubClient.ConnectionState.DISCONNECTED) {
-                connect();
+
+                twitchConnect();
             }
-        }).bounds(left, 145, contentWidth, 20).build();
+        }).bounds(left, 155, width, 20).build();
 
         connectionButton.active = eventSub.getConnectionState() != TwitchEventSubClient.ConnectionState.CONNECTING;
 
@@ -51,44 +114,190 @@ public final class StreamChatConfigScreen extends Screen {
             setFocused(null);
 
             eventSub.disconnect();
-
-            statusMessage = "Disconnected";
-        }).bounds(left, 175, contentWidth, 20).build();
+        }).bounds(left, 185, width, 20).build();
 
         disconnectButton.active = eventSub.getConnectionState() != TwitchEventSubClient.ConnectionState.DISCONNECTED;
 
         addRenderableWidget(disconnectButton);
 
-        addRenderableWidget(Button.builder(Component.literal("Settings"), button -> {
+        addRenderableWidget(Button.builder(Component.literal("Log Out"), button -> {
             button.setFocused(false);
             setFocused(null);
 
-            minecraft.gui.setScreen(new StreamChatSettingsScreen(this));
-        }).bounds(left, 215, contentWidth, 20).build());
-
-        addRenderableWidget(Button.builder(Component.literal("Close"), button -> {
-            button.setFocused(false);
-            setFocused(null);
-
-            minecraft.gui.setScreen(parent);
-        }).bounds(left, 245, contentWidth, 20).build());
-
-        eventSub.setStateListener(this::connectionStateChanged);
+            twitchLogout();
+        }).bounds(left, 215, width, 20).build());
     }
 
-    private Component connectionButtonText() {
+    /*
+     * Kick controls
+     */
+
+    private void createKickControls(int left, int width) {
+        KickAuth auth = StreamChatBridgeClient.getKickAuth();
+
+        KickChatClient chat = StreamChatBridgeClient.getKickChat();
+
+        if (!auth.hasClientCredentials()) {
+            addRenderableWidget(Button.builder(Component.literal("Configure Kick First"), button -> {
+                button.setFocused(false);
+                setFocused(null);
+
+                minecraft.gui.setScreen(new StreamChatSettingsScreen(this));
+            }).bounds(left, 155, width, 20).build());
+
+            return;
+        }
+
+        if (!auth.isAuthenticated()) {
+            Button loginButton = Button.builder(Component.literal(kickAuthenticationInProgress ? "Waiting for Kick..." : "Log in with Kick"), button -> {
+                button.setFocused(false);
+                setFocused(null);
+
+                kickLogin();
+            }).bounds(left, 155, width, 20).build();
+
+            loginButton.active = !kickAuthenticationInProgress;
+
+            addRenderableWidget(loginButton);
+
+            return;
+        }
+
+        Button connectionButton = Button.builder(kickConnectionButtonText(), button -> {
+            button.setFocused(false);
+            setFocused(null);
+
+            KickChatClient.ConnectionState state = chat.getConnectionState();
+
+            if (state == KickChatClient.ConnectionState.CONNECTED) {
+
+                kickReconnect();
+
+            } else if (state == KickChatClient.ConnectionState.DISCONNECTED) {
+
+                kickConnect();
+            }
+        }).bounds(left, 155, width, 20).build();
+
+        connectionButton.active = chat.getConnectionState() != KickChatClient.ConnectionState.CONNECTING;
+
+        addRenderableWidget(connectionButton);
+
+        Button disconnectButton = Button.builder(Component.literal("Disconnect"), button -> {
+            button.setFocused(false);
+            setFocused(null);
+
+            chat.disconnect();
+        }).bounds(left, 185, width, 20).build();
+
+        disconnectButton.active = chat.getConnectionState() != KickChatClient.ConnectionState.DISCONNECTED;
+
+        addRenderableWidget(disconnectButton);
+
+        addRenderableWidget(Button.builder(Component.literal("Log Out"), button -> {
+            button.setFocused(false);
+            setFocused(null);
+
+            kickLogout();
+        }).bounds(left, 215, width, 20).build());
+    }
+
+    /*
+     * Twitch actions
+     */
+
+    private Component twitchConnectionButtonText() {
         TwitchEventSubClient.ConnectionState state = StreamChatBridgeClient.getTwitchEventSub().getConnectionState();
 
         return Component.literal(switch (state) {
-            case CONNECTED -> "Reconnect";
+            case CONNECTED -> "Reconnect Twitch";
 
             case CONNECTING -> "Connecting...";
 
-            case DISCONNECTED -> "Connect";
+            case DISCONNECTED -> "Connect Twitch";
         });
     }
 
-    private void connect() {
+    private void twitchLogin() {
+        if (twitchAuthenticationInProgress) {
+            return;
+        }
+
+        TwitchAuth auth = StreamChatBridgeClient.getTwitchAuth();
+
+        twitchAuthenticationInProgress = true;
+
+        statusMessage = "Waiting for Twitch authorization...";
+
+        rebuildWidgets();
+
+        Thread.startVirtualThread(() -> {
+            boolean authenticated = auth.authenticate();
+
+            if (minecraft == null) {
+                return;
+            }
+
+            minecraft.execute(() -> {
+                twitchAuthenticationInProgress = false;
+
+                if (!authenticated) {
+                    statusMessage = "Twitch authentication failed";
+
+                    rebuildWidgets();
+
+                    return;
+                }
+
+                statusMessage = "Logged in to Twitch as " + auth.getUsername();
+
+                prepareTwitchAccount();
+
+                rebuildWidgets();
+            });
+        });
+    }
+
+    private void prepareTwitchAccount() {
+        TwitchClient twitchClient = StreamChatBridgeClient.getTwitchClient();
+
+        TwitchEventSubClient eventSub = StreamChatBridgeClient.getTwitchEventSub();
+
+        String configuredChannel = ConfigManager.get().twitchChannel;
+
+        Thread.startVirtualThread(() -> {
+            if (!twitchClient.setChannel(configuredChannel)) {
+                if (minecraft != null) {
+                    minecraft.execute(() -> {
+                        statusMessage = "Could not select Twitch channel";
+
+                        rebuildWidgets();
+                    });
+                }
+
+                return;
+            }
+
+            eventSub.setChannelId(twitchClient.getChannelId());
+
+            eventSub.connect();
+        });
+    }
+
+    private void twitchLogout() {
+        TwitchAuth auth = StreamChatBridgeClient.getTwitchAuth();
+
+        TwitchEventSubClient eventSub = StreamChatBridgeClient.getTwitchEventSub();
+
+        eventSub.disconnect();
+        auth.logout();
+
+        statusMessage = "Logged out of Twitch";
+
+        rebuildWidgets();
+    }
+
+    private void twitchConnect() {
         TwitchAuth auth = StreamChatBridgeClient.getTwitchAuth();
 
         TwitchClient twitchClient = StreamChatBridgeClient.getTwitchClient();
@@ -98,23 +307,25 @@ public final class StreamChatConfigScreen extends Screen {
         if (!auth.isAuthenticated()) {
             statusMessage = "Twitch account is not authenticated";
 
+            rebuildWidgets();
+
             return;
         }
 
         if (twitchClient.getChannelId() == null) {
-            statusMessage = "No channel selected";
+            statusMessage = "No Twitch channel selected";
+
+            rebuildWidgets();
 
             return;
         }
-
-        statusMessage = "Connecting...";
 
         eventSub.setChannelId(twitchClient.getChannelId());
 
         eventSub.connect();
     }
 
-    private void reconnect() {
+    private void twitchReconnect() {
         TwitchAuth auth = StreamChatBridgeClient.getTwitchAuth();
 
         TwitchClient twitchClient = StreamChatBridgeClient.getTwitchClient();
@@ -124,64 +335,282 @@ public final class StreamChatConfigScreen extends Screen {
         if (!auth.isAuthenticated()) {
             statusMessage = "Twitch account is not authenticated";
 
+            rebuildWidgets();
+
             return;
         }
 
         if (twitchClient.getChannelId() == null) {
-            statusMessage = "No channel selected";
+            statusMessage = "No Twitch channel selected";
+
+            rebuildWidgets();
 
             return;
         }
-
-        statusMessage = "Reconnecting...";
 
         eventSub.setChannelId(twitchClient.getChannelId());
 
         eventSub.reconnect();
     }
 
-    private void connectionStateChanged(TwitchEventSubClient.ConnectionState state) {
+    private void twitchConnectionStateChanged(TwitchEventSubClient.ConnectionState state) {
         if (minecraft == null) {
             return;
         }
 
         minecraft.execute(() -> {
             statusMessage = switch (state) {
-                case CONNECTING -> "Connecting...";
+                case CONNECTING -> "Connecting Twitch...";
 
-                case CONNECTED -> "Connected";
+                case CONNECTED -> "Twitch connected";
 
-                case DISCONNECTED -> "Disconnected";
+                case DISCONNECTED -> "Twitch disconnected";
             };
 
             rebuildWidgets();
         });
     }
 
-    private String accountText() {
-        TwitchAuth auth = StreamChatBridgeClient.getTwitchAuth();
+    /*
+     * Kick actions
+     */
 
-        return auth.isAuthenticated() ? auth.getUsername() : "Not connected";
+    private Component kickConnectionButtonText() {
+        KickChatClient.ConnectionState state = StreamChatBridgeClient.getKickChat().getConnectionState();
+
+        return Component.literal(switch (state) {
+            case CONNECTED -> "Reconnect Kick";
+
+            case CONNECTING -> "Connecting...";
+
+            case DISCONNECTED -> "Connect Kick";
+        });
     }
 
-    private String channelText() {
+    private void kickLogin() {
+        if (kickAuthenticationInProgress) {
+            return;
+        }
+
+        KickAuth auth = StreamChatBridgeClient.getKickAuth();
+
+        if (!auth.hasClientCredentials()) {
+            statusMessage = "Configure Kick credentials first";
+
+            rebuildWidgets();
+
+            return;
+        }
+
+        kickAuthenticationInProgress = true;
+
+        statusMessage = "Waiting for Kick authorization...";
+
+        rebuildWidgets();
+
+        Thread.startVirtualThread(() -> {
+            boolean authenticated = auth.authenticate();
+
+            if (minecraft == null) {
+                return;
+            }
+
+            minecraft.execute(() -> {
+                kickAuthenticationInProgress = false;
+
+                if (!authenticated) {
+                    statusMessage = "Kick authentication failed";
+
+                    rebuildWidgets();
+
+                    return;
+                }
+
+                statusMessage = "Logged in to Kick as " + auth.getUsername();
+
+                rebuildWidgets();
+
+                kickConnect();
+            });
+        });
+    }
+
+    private void kickConnect() {
+        KickAuth auth = StreamChatBridgeClient.getKickAuth();
+
+        KickClient client = StreamChatBridgeClient.getKickClient();
+
+        KickChatClient chat = StreamChatBridgeClient.getKickChat();
+
+        if (!auth.isAuthenticated()) {
+            statusMessage = "Kick account is not authenticated";
+
+            rebuildWidgets();
+
+            return;
+        }
+
+        if (chat.getConnectionState() == KickChatClient.ConnectionState.CONNECTING) {
+
+            return;
+        }
+
+        Thread.startVirtualThread(() -> {
+            boolean channelLoaded = client.loadOwnChannel();
+
+            if (!channelLoaded) {
+                if (minecraft != null) {
+                    minecraft.execute(() -> {
+                        statusMessage = "Could not load Kick channel";
+
+                        rebuildWidgets();
+                    });
+                }
+
+                return;
+            }
+
+            boolean started = chat.connect(auth.getUsername());
+
+            if (!started && minecraft != null) {
+                minecraft.execute(() -> {
+                    statusMessage = "Could not connect to Kick chat";
+
+                    rebuildWidgets();
+                });
+            }
+        });
+    }
+
+    private void kickReconnect() {
+        KickChatClient chat = StreamChatBridgeClient.getKickChat();
+
+        chat.disconnect();
+
+        kickConnect();
+    }
+
+    private void kickLogout() {
+        KickAuth auth = StreamChatBridgeClient.getKickAuth();
+
+        KickClient client = StreamChatBridgeClient.getKickClient();
+
+        KickChatClient chat = StreamChatBridgeClient.getKickChat();
+
+        chat.disconnect();
+        client.clearChannel();
+        auth.logout();
+
+        statusMessage = "Logged out of Kick";
+
+        rebuildWidgets();
+    }
+
+    private void kickConnectionStateChanged(KickChatClient.ConnectionState state) {
+        if (minecraft == null) {
+            return;
+        }
+
+        minecraft.execute(() -> {
+            statusMessage = switch (state) {
+                case CONNECTING -> "Connecting Kick...";
+
+                case CONNECTED -> "Kick connected";
+
+                case DISCONNECTED -> "Kick disconnected";
+            };
+
+            rebuildWidgets();
+        });
+    }
+
+    /*
+     * Twitch display
+     */
+
+    private String twitchAccountText() {
+        TwitchAuth auth = StreamChatBridgeClient.getTwitchAuth();
+
+        return auth.isAuthenticated() ? auth.getUsername() : "Not logged in";
+    }
+
+    private String twitchChannelText() {
+        TwitchAuth auth = StreamChatBridgeClient.getTwitchAuth();
+
+        if (!auth.isAuthenticated()) {
+            return "—";
+        }
+
         String channel = ConfigManager.get().twitchChannel;
 
         if (channel != null && !channel.isBlank()) {
+
             return channel;
         }
 
-        TwitchAuth auth = StreamChatBridgeClient.getTwitchAuth();
-
-        if (auth.isAuthenticated()) {
-            return auth.getUsername();
-        }
-
-        return "Not selected";
+        return auth.getUsername();
     }
 
-    private String connectionText() {
+    private String twitchConnectionText() {
+        if (!StreamChatBridgeClient.getTwitchAuth().isAuthenticated()) {
+
+            return "Not logged in";
+        }
+
         return switch (StreamChatBridgeClient.getTwitchEventSub().getConnectionState()) {
+            case CONNECTED -> "Connected";
+
+            case CONNECTING -> "Connecting...";
+
+            case DISCONNECTED -> "Disconnected";
+        };
+    }
+
+    /*
+     * Kick display
+     */
+
+    private String kickAccountText() {
+        KickAuth auth = StreamChatBridgeClient.getKickAuth();
+
+        if (!auth.hasClientCredentials()) {
+            return "Not configured";
+        }
+
+        return auth.isAuthenticated() ? auth.getUsername() : "Not logged in";
+    }
+
+    private String kickChannelText() {
+        KickAuth auth = StreamChatBridgeClient.getKickAuth();
+
+        if (!auth.isAuthenticated()) {
+            return "—";
+        }
+
+        KickClient client = StreamChatBridgeClient.getKickClient();
+
+        String channel = client.getChannelSlug();
+
+        if (channel != null && !channel.isBlank()) {
+
+            return channel;
+        }
+
+        return auth.getUsername();
+    }
+
+    private String kickConnectionText() {
+        KickAuth auth = StreamChatBridgeClient.getKickAuth();
+
+        if (!auth.hasClientCredentials()) {
+            return "Not configured";
+        }
+
+        if (!auth.isAuthenticated()) {
+            return "Not logged in";
+        }
+
+        return switch (StreamChatBridgeClient.getKickChat().getConnectionState()) {
             case CONNECTED -> "Connected";
 
             case CONNECTING -> "Connecting...";
@@ -194,12 +623,16 @@ public final class StreamChatConfigScreen extends Screen {
     public void onClose() {
         StreamChatBridgeClient.getTwitchEventSub().setStateListener(null);
 
+        StreamChatBridgeClient.getKickChat().setStateListener(null);
+
         minecraft.gui.setScreen(parent);
     }
 
     @Override
     public void removed() {
         StreamChatBridgeClient.getTwitchEventSub().setStateListener(null);
+
+        StreamChatBridgeClient.getKickChat().setStateListener(null);
 
         super.removed();
     }
@@ -208,27 +641,55 @@ public final class StreamChatConfigScreen extends Screen {
     public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
         super.extractRenderState(graphics, mouseX, mouseY, delta);
 
-        int contentWidth = 300;
-        int left = width / 2 - contentWidth / 2;
+        int totalWidth = 400;
+        int columnWidth = 180;
+        int gap = 40;
+
+        int left = width / 2 - totalWidth / 2;
+
+        int twitchLeft = left;
+        int kickLeft = left + columnWidth + gap;
 
         graphics.text(font, title, width / 2 - font.width(title) / 2, 25, 0xFFFFFFFF, true);
 
-        graphics.text(font, "TWITCH", left, 65, 0xFFAAAAAA, false);
+        /*
+         * Twitch
+         */
 
-        graphics.text(font, "Account", left, 82, 0xFF888888, false);
+        graphics.text(font, "TWITCH", twitchLeft, 65, 0xFFAA55AA, false);
 
-        graphics.text(font, accountText(), left + 90, 82, 0xFFFFFFFF, false);
+        graphics.text(font, "Account", twitchLeft, 85, 0xFF888888, false);
 
-        graphics.text(font, "Channel", left, 99, 0xFF888888, false);
+        graphics.text(font, twitchAccountText(), twitchLeft + 65, 85, 0xFFFFFFFF, false);
 
-        graphics.text(font, channelText(), left + 90, 99, 0xFFFFFFFF, false);
+        graphics.text(font, "Channel", twitchLeft, 102, 0xFF888888, false);
 
-        graphics.text(font, "Status", left, 116, 0xFF888888, false);
+        graphics.text(font, twitchChannelText(), twitchLeft + 65, 102, 0xFFFFFFFF, false);
 
-        graphics.text(font, connectionText(), left + 90, 116, 0xFFFFFFFF, false);
+        graphics.text(font, "Status", twitchLeft, 119, 0xFF888888, false);
+
+        graphics.text(font, twitchConnectionText(), twitchLeft + 65, 119, 0xFFFFFFFF, false);
+
+        /*
+         * Kick
+         */
+
+        graphics.text(font, "KICK", kickLeft, 65, 0xFF53FC18, false);
+
+        graphics.text(font, "Account", kickLeft, 85, 0xFF888888, false);
+
+        graphics.text(font, kickAccountText(), kickLeft + 65, 85, 0xFFFFFFFF, false);
+
+        graphics.text(font, "Channel", kickLeft, 102, 0xFF888888, false);
+
+        graphics.text(font, kickChannelText(), kickLeft + 65, 102, 0xFFFFFFFF, false);
+
+        graphics.text(font, "Status", kickLeft, 119, 0xFF888888, false);
+
+        graphics.text(font, kickConnectionText(), kickLeft + 65, 119, 0xFFFFFFFF, false);
 
         if (!statusMessage.isBlank()) {
-            graphics.text(font, statusMessage, width / 2 - font.width(statusMessage) / 2, 275, 0xFFAAAAAA, false);
+            graphics.text(font, statusMessage, width / 2 - font.width(statusMessage) / 2, 325, 0xFFAAAAAA, false);
         }
     }
 }

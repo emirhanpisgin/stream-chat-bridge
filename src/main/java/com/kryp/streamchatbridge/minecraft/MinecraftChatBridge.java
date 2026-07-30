@@ -1,6 +1,7 @@
 package com.kryp.streamchatbridge.minecraft;
 
 import com.kryp.streamchatbridge.config.ConfigManager;
+import com.kryp.streamchatbridge.kick.KickClient;
 import com.kryp.streamchatbridge.twitch.TwitchClient;
 import net.fabricmc.fabric.api.client.message.v1.ClientSendMessageEvents;
 import net.minecraft.ChatFormatting;
@@ -15,9 +16,13 @@ public final class MinecraftChatBridge {
     private MinecraftChatBridge() {
     }
 
-    public static void registerOutgoing(TwitchClient twitchClient) {
+    public static void registerOutgoing(TwitchClient twitchClient, KickClient kickClient) {
         ClientSendMessageEvents.ALLOW_CHAT.register(message -> {
-            if (!ConfigManager.get().twitchSendEnabled) {
+            boolean twitchEnabled = ConfigManager.get().twitchSendEnabled;
+
+            boolean kickEnabled = ConfigManager.get().kickSendEnabled;
+
+            if (!twitchEnabled && !kickEnabled) {
                 return true;
             }
 
@@ -31,22 +36,34 @@ public final class MinecraftChatBridge {
                 return true;
             }
 
-            String twitchMessage = message.substring(prefix.length()).trim();
+            String outgoingMessage = message.substring(prefix.length()).trim();
 
-            if (twitchMessage.isEmpty()) {
+            if (outgoingMessage.isEmpty()) {
                 return false;
             }
 
-            Thread.startVirtualThread(() -> {
-                boolean sent = twitchClient.sendMessage(twitchMessage);
-
-                if (!sent) {
-                    showLocalMessage(systemMessage().append(twitch()).append(separator(": ")).append(error("Failed to send message")));
-                }
-            });
+            Thread.startVirtualThread(() -> sendOutgoingMessage(twitchClient, kickClient, outgoingMessage, twitchEnabled, kickEnabled));
 
             return false;
         });
+    }
+
+    private static void sendOutgoingMessage(TwitchClient twitchClient, KickClient kickClient, String message, boolean twitchEnabled, boolean kickEnabled) {
+        if (twitchEnabled) {
+            boolean sent = twitchClient.sendMessage(message);
+
+            if (!sent) {
+                showLocalMessage(systemMessage().append(twitch()).append(separator(": ")).append(error("Failed to send message")));
+            }
+        }
+
+        if (kickEnabled) {
+            boolean sent = kickClient.sendMessage(message);
+
+            if (!sent) {
+                showLocalMessage(systemMessage().append(kick()).append(separator(": ")).append(error("Failed to send message")));
+            }
+        }
     }
 
     public static void showTwitchMessage(String username, String message) {
@@ -63,6 +80,16 @@ public final class MinecraftChatBridge {
         }
 
         showLocalMessage(buildIncomingComponent(format, platform, username, message));
+    }
+
+    public static void showKickMessage(String username, String message) {
+        String format = ConfigManager.get().incomingMessageFormat;
+
+        if (format == null || format.isBlank()) {
+            format = DEFAULT_FORMAT;
+        }
+
+        showLocalMessage(buildIncomingComponent(format, "Kick", username, message));
     }
 
     public static MutableComponent buildIncomingComponent(String format, String platform, String username, String message) {
@@ -106,6 +133,7 @@ public final class MinecraftChatBridge {
                         currentColor = reset ? null : parsedColor;
 
                         position = closing + 1;
+
                         textStart = position;
 
                         continue;
@@ -180,6 +208,7 @@ public final class MinecraftChatBridge {
 
         for (int index : indexes) {
             if (index >= 0 && (result == -1 || index < result)) {
+
                 result = index;
             }
         }
@@ -239,6 +268,10 @@ public final class MinecraftChatBridge {
 
     public static MutableComponent twitch() {
         return Component.literal("Twitch").withStyle(ChatFormatting.DARK_PURPLE);
+    }
+
+    public static MutableComponent kick() {
+        return Component.literal("Kick").withStyle(ChatFormatting.GREEN);
     }
 
     public static MutableComponent label(String text) {

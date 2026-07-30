@@ -21,6 +21,9 @@ dependencies {
 
 	// Fabric API. This is technically optional, but you probably want it anyway.
 	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+	implementation "com.pusher:pusher-java-client:2.4.4"
+	include "com.pusher:pusher-java-client:2.4.4"
 }
 
 processResources {

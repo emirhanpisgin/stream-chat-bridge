@@ -1,6 +1,9 @@
 package com.kryp.streamchatbridge;
 
 import com.kryp.streamchatbridge.config.ConfigManager;
+import com.kryp.streamchatbridge.kick.KickAuth;
+import com.kryp.streamchatbridge.kick.KickChatClient;
+import com.kryp.streamchatbridge.kick.KickClient;
 import com.kryp.streamchatbridge.minecraft.MinecraftChatBridge;
 import com.kryp.streamchatbridge.minecraft.StreamChatCommands;
 import com.kryp.streamchatbridge.minecraft.StreamChatKeybinds;
@@ -22,11 +25,17 @@ public class StreamChatBridgeClient implements ClientModInitializer {
 
     private static final TwitchEventSubClient TWITCH_EVENT_SUB = new TwitchEventSubClient(TWITCH_AUTH, MinecraftChatBridge::showTwitchMessage);
 
+    private static final KickAuth KICK_AUTH = new KickAuth();
+
+    private static final KickClient KICK_CLIENT = new KickClient(KICK_AUTH);
+
+    private static final KickChatClient KICK_CHAT = new KickChatClient(MinecraftChatBridge::showKickMessage);
+
     @Override
     public void onInitializeClient() {
         ConfigManager.load();
 
-        MinecraftChatBridge.registerOutgoing(TWITCH_CLIENT);
+        MinecraftChatBridge.registerOutgoing(TWITCH_CLIENT, KICK_CLIENT);
 
         StreamChatCommands.register();
         StreamChatKeybinds.register();
@@ -36,7 +45,6 @@ public class StreamChatBridgeClient implements ClientModInitializer {
                 Thread.sleep(1_000L);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-
                 return;
             }
 
@@ -47,6 +55,7 @@ public class StreamChatBridgeClient implements ClientModInitializer {
             System.out.println("[Stream Chat Bridge] Shutting down...");
 
             TWITCH_EVENT_SUB.shutdown();
+            KICK_CHAT.disconnect();
         });
 
         System.out.println("[Stream Chat Bridge] Loaded");
@@ -54,22 +63,47 @@ public class StreamChatBridgeClient implements ClientModInitializer {
         Thread.startVirtualThread(() -> {
             if (TWITCH_AUTH.restoreSession()) {
                 onTwitchAuthenticated();
-                return;
-            }
-
-            System.out.println("[Stream Chat Bridge] No valid Twitch session found.");
-
-            System.out.println("[Stream Chat Bridge] Starting Twitch authentication...");
-
-            if (TWITCH_AUTH.authenticate()) {
-                onTwitchAuthenticated();
             } else {
-                System.err.println("[Stream Chat Bridge] Twitch authentication was not completed.");
+                System.out.println("[Stream Chat Bridge] No valid Twitch session found.");
+            }
+        });
+
+        Thread.startVirtualThread(() -> {
+            if (KICK_AUTH.restoreSession()) {
+                onKickAuthenticated();
+            } else {
+                System.out.println("[Stream Chat Bridge] No valid Kick session found.");
             }
         });
     }
 
+    private static void onKickAuthenticated() {
+        System.out.println("[Stream Chat Bridge] Kick authenticated as: " + KICK_AUTH.getUsername());
+
+        String username = KICK_AUTH.getUsername();
+
+        if (username == null || username.isBlank()) {
+            System.err.println("[Stream Chat Bridge] Cannot start Kick chat: username is missing.");
+
+            return;
+        }
+
+        if (!KICK_CLIENT.loadOwnChannel()) {
+            System.err.println("[Stream Chat Bridge] Could not load Kick channel.");
+        }
+
+        if (!KICK_CHAT.connect(username)) {
+            System.err.println("[Stream Chat Bridge] Could not connect to Kick chat.");
+        }
+    }
+
     private static void showJoinStatus() {
+        if (!TWITCH_AUTH.isAuthenticated()) {
+            MinecraftChatBridge.showLocalMessage(MinecraftChatBridge.systemMessage().append(MinecraftChatBridge.twitch()).append(MinecraftChatBridge.separator(": ")).append(MinecraftChatBridge.error("Not logged in")));
+
+            return;
+        }
+
         TwitchEventSubClient.ConnectionState state = TWITCH_EVENT_SUB.getConnectionState();
 
         MutableComponent message = MinecraftChatBridge.systemMessage().append(MinecraftChatBridge.twitch()).append(MinecraftChatBridge.separator(": "));
@@ -99,6 +133,7 @@ public class StreamChatBridgeClient implements ClientModInitializer {
         String configuredChannel = ConfigManager.get().twitchChannel;
 
         if (configuredChannel != null && !configuredChannel.isBlank()) {
+
             return configuredChannel;
         }
 
@@ -109,7 +144,7 @@ public class StreamChatBridgeClient implements ClientModInitializer {
         return null;
     }
 
-    private void onTwitchAuthenticated() {
+    private static void onTwitchAuthenticated() {
         System.out.println("[Stream Chat Bridge] Twitch authenticated as: " + TWITCH_AUTH.getUsername());
 
         String configuredChannel = ConfigManager.get().twitchChannel;
@@ -135,5 +170,17 @@ public class StreamChatBridgeClient implements ClientModInitializer {
 
     public static TwitchEventSubClient getTwitchEventSub() {
         return TWITCH_EVENT_SUB;
+    }
+
+    public static KickAuth getKickAuth() {
+        return KICK_AUTH;
+    }
+
+    public static KickClient getKickClient() {
+        return KICK_CLIENT;
+    }
+
+    public static KickChatClient getKickChat() {
+        return KICK_CHAT;
     }
 }

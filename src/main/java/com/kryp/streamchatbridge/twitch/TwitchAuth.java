@@ -2,9 +2,9 @@ package com.kryp.streamchatbridge.twitch;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
+import com.kryp.streamchatbridge.util.BrowserUtils;
 import net.fabricmc.loader.api.FabricLoader;
 
-import java.awt.Desktop;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -52,9 +52,11 @@ public final class TwitchAuth {
             }
 
             accessToken = getString(json, "accessToken");
+
             refreshToken = getString(json, "refreshToken");
 
             if (accessToken == null || accessToken.isBlank()) {
+
                 return false;
             }
 
@@ -63,6 +65,7 @@ public final class TwitchAuth {
             }
 
             if (refreshToken != null && !refreshToken.isBlank() && refreshAccessToken()) {
+
                 return loadCurrentUser();
             }
 
@@ -78,16 +81,22 @@ public final class TwitchAuth {
             JsonObject device = requestDeviceCode();
 
             String deviceCode = device.get("device_code").getAsString();
+
             String userCode = device.get("user_code").getAsString();
+
             String verificationUri = device.get("verification_uri").getAsString();
 
             int expiresIn = device.get("expires_in").getAsInt();
+
             int interval = device.get("interval").getAsInt();
 
             System.out.println("[Stream Chat Bridge] Twitch authorization code: " + userCode);
+
             System.out.println("[Stream Chat Bridge] Open: " + verificationUri);
 
-            openBrowser(verificationUri);
+            if (!BrowserUtils.open(verificationUri)) {
+                System.out.println("[Stream Chat Bridge] Open the Twitch authorization URL manually.");
+            }
 
             long deadline = System.currentTimeMillis() + expiresIn * 1000L;
 
@@ -98,6 +107,7 @@ public final class TwitchAuth {
 
                 if (tokenResponse.has("access_token")) {
                     accessToken = tokenResponse.get("access_token").getAsString();
+
                     refreshToken = tokenResponse.get("refresh_token").getAsString();
 
                     saveTokens();
@@ -118,6 +128,7 @@ public final class TwitchAuth {
 
         } catch (Exception e) {
             System.err.println("[Stream Chat Bridge] Twitch authentication failed: " + e.getMessage());
+
             return false;
         }
     }
@@ -136,6 +147,7 @@ public final class TwitchAuth {
     }
 
     private JsonObject requestDeviceCode() throws IOException, InterruptedException {
+
         String body = "client_id=" + encode(CLIENT_ID) + "&scopes=" + encode(SCOPES);
 
         HttpRequest request = HttpRequest.newBuilder().uri(URI.create(DEVICE_URL)).header("Content-Type", "application/x-www-form-urlencoded").POST(HttpRequest.BodyPublishers.ofString(body)).build();
@@ -176,16 +188,17 @@ public final class TwitchAuth {
 
             accessToken = json.get("access_token").getAsString();
 
-            // Device-flow refresh tokens are rotated.
             if (json.has("refresh_token")) {
                 refreshToken = json.get("refresh_token").getAsString();
             }
 
             saveTokens();
+
             return true;
 
         } catch (Exception e) {
             System.err.println("[Stream Chat Bridge] Twitch token refresh failed: " + e.getMessage());
+
             return false;
         }
     }
@@ -203,40 +216,36 @@ public final class TwitchAuth {
             JsonObject json = GSON.fromJson(response.body(), JsonObject.class);
 
             if (!json.has("data") || json.getAsJsonArray("data").isEmpty()) {
+
                 return false;
             }
 
             JsonObject user = json.getAsJsonArray("data").get(0).getAsJsonObject();
 
             userId = user.get("id").getAsString();
+
             username = user.get("display_name").getAsString();
 
             return true;
 
         } catch (Exception e) {
             System.err.println("[Stream Chat Bridge] Twitch user lookup failed: " + e.getMessage());
+
             return false;
         }
     }
 
     private void saveTokens() throws IOException {
+
         JsonObject json = new JsonObject();
+
         json.addProperty("accessToken", accessToken);
+
         json.addProperty("refreshToken", refreshToken);
 
         Files.createDirectories(TOKEN_PATH.getParent());
 
         Files.writeString(TOKEN_PATH, GSON.toJson(json), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-    }
-
-    private void openBrowser(String url) {
-        try {
-            if (Desktop.isDesktopSupported()) {
-                Desktop.getDesktop().browse(URI.create(url));
-            }
-        } catch (Exception e) {
-            System.out.println("[Stream Chat Bridge] Could not open browser automatically.");
-        }
     }
 
     private static String encode(String value) {
@@ -245,6 +254,7 @@ public final class TwitchAuth {
 
     public String findUserId(String login) {
         if (!isAuthenticated() || login == null || login.isBlank()) {
+
             return null;
         }
 
@@ -257,12 +267,14 @@ public final class TwitchAuth {
 
             if (response.statusCode() != 200) {
                 System.err.println("[Stream Chat Bridge] Twitch channel lookup failed. HTTP " + response.statusCode());
+
                 return null;
             }
 
             JsonObject json = GSON.fromJson(response.body(), JsonObject.class);
 
             if (!json.has("data") || json.getAsJsonArray("data").isEmpty()) {
+
                 return null;
             }
 
@@ -277,6 +289,7 @@ public final class TwitchAuth {
 
     private static String getString(JsonObject object, String key) {
         if (!object.has(key) || object.get(key).isJsonNull()) {
+
             return null;
         }
 
