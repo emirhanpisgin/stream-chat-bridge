@@ -9,6 +9,8 @@ import com.kryp.streamchatbridge.twitch.TwitchClient;
 import com.kryp.streamchatbridge.twitch.TwitchEventSubClient;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
+import net.minecraft.network.chat.MutableComponent;
 
 public class StreamChatBridgeClient implements ClientModInitializer {
 
@@ -28,6 +30,18 @@ public class StreamChatBridgeClient implements ClientModInitializer {
 
         StreamChatCommands.register();
         StreamChatKeybinds.register();
+
+        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> Thread.startVirtualThread(() -> {
+            try {
+                Thread.sleep(1_000L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+
+                return;
+            }
+
+            client.execute(StreamChatBridgeClient::showJoinStatus);
+        }));
 
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> {
             System.out.println("[Stream Chat Bridge] Shutting down...");
@@ -53,6 +67,46 @@ public class StreamChatBridgeClient implements ClientModInitializer {
                 System.err.println("[Stream Chat Bridge] Twitch authentication was not completed.");
             }
         });
+    }
+
+    private static void showJoinStatus() {
+        TwitchEventSubClient.ConnectionState state = TWITCH_EVENT_SUB.getConnectionState();
+
+        MutableComponent message = MinecraftChatBridge.systemMessage().append(MinecraftChatBridge.twitch()).append(MinecraftChatBridge.separator(": "));
+
+        switch (state) {
+            case CONNECTED -> {
+                message.append(MinecraftChatBridge.success("Connected"));
+
+                String channel = getDisplayChannel();
+
+                if (channel != null) {
+                    message.append(MinecraftChatBridge.separator(" → "));
+
+                    message.append(MinecraftChatBridge.value(channel));
+                }
+            }
+
+            case CONNECTING -> message.append(MinecraftChatBridge.warning("Connecting..."));
+
+            case DISCONNECTED -> message.append(MinecraftChatBridge.error("Disconnected"));
+        }
+
+        MinecraftChatBridge.showLocalMessage(message);
+    }
+
+    private static String getDisplayChannel() {
+        String configuredChannel = ConfigManager.get().twitchChannel;
+
+        if (configuredChannel != null && !configuredChannel.isBlank()) {
+            return configuredChannel;
+        }
+
+        if (TWITCH_AUTH.isAuthenticated()) {
+            return TWITCH_AUTH.getUsername();
+        }
+
+        return null;
     }
 
     private void onTwitchAuthenticated() {

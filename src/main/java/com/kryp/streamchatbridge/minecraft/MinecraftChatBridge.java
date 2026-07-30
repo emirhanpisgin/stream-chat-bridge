@@ -10,7 +10,7 @@ import net.minecraft.network.chat.MutableComponent;
 
 public final class MinecraftChatBridge {
 
-    public static final String DEFAULT_FORMAT = "<light_purple>[{platform}]<reset> <green>{username}<reset>: <white>{message}";
+    public static final String DEFAULT_FORMAT = "<dark_purple>[{platform}]<reset> <green>{username}<reset>: <white>{message}";
 
     private MinecraftChatBridge() {
     }
@@ -41,7 +41,7 @@ public final class MinecraftChatBridge {
                 boolean sent = twitchClient.sendMessage(twitchMessage);
 
                 if (!sent) {
-                    showLocalMessage("[Stream Chat Bridge] Failed to send message to Twitch.");
+                    showLocalMessage(systemMessage().append(twitch()).append(separator(": ")).append(error("Failed to send message")));
                 }
             });
 
@@ -90,7 +90,6 @@ public final class MinecraftChatBridge {
         int textStart = 0;
 
         while (position < format.length()) {
-
             if (format.charAt(position) == '<') {
                 int closing = format.indexOf('>', position + 1);
 
@@ -228,6 +227,42 @@ public final class MinecraftChatBridge {
 
             default -> null;
         };
+    }
+
+    /*
+     * Stream Chat Bridge system message components.
+     */
+
+    public static MutableComponent systemMessage() {
+        return Component.literal("[Stream Chat Bridge] ").withStyle(ChatFormatting.DARK_GRAY);
+    }
+
+    public static MutableComponent twitch() {
+        return Component.literal("Twitch").withStyle(ChatFormatting.DARK_PURPLE);
+    }
+
+    public static MutableComponent label(String text) {
+        return Component.literal(text).withStyle(ChatFormatting.GRAY);
+    }
+
+    public static MutableComponent value(String text) {
+        return Component.literal(text).withStyle(ChatFormatting.WHITE);
+    }
+
+    public static MutableComponent success(String text) {
+        return Component.literal(text).withStyle(ChatFormatting.GREEN);
+    }
+
+    public static MutableComponent warning(String text) {
+        return Component.literal(text).withStyle(ChatFormatting.YELLOW);
+    }
+
+    public static MutableComponent error(String text) {
+        return Component.literal(text).withStyle(ChatFormatting.RED);
+    }
+
+    public static MutableComponent separator(String text) {
+        return Component.literal(text).withStyle(ChatFormatting.DARK_GRAY);
     }
 
     public static void showLocalMessage(String message) {

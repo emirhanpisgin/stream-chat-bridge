@@ -9,6 +9,7 @@ import com.kryp.streamchatbridge.twitch.TwitchEventSubClient;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
 import net.minecraft.client.Minecraft;
+import net.minecraft.network.chat.MutableComponent;
 
 public final class StreamChatCommands {
 
@@ -62,23 +63,33 @@ public final class StreamChatCommands {
             channel = configuredChannel;
         }
 
-        String connection = switch (eventSub.getConnectionState()) {
-            case CONNECTED -> "Connected";
+        MinecraftChatBridge.showLocalMessage(MinecraftChatBridge.systemMessage());
 
-            case CONNECTING -> "Connecting";
+        MinecraftChatBridge.showLocalMessage(MinecraftChatBridge.label("Account: ").append(MinecraftChatBridge.value(account)));
 
-            case DISCONNECTED -> "Disconnected";
-        };
+        MinecraftChatBridge.showLocalMessage(MinecraftChatBridge.label("Channel: ").append(MinecraftChatBridge.value(channel)));
 
-        MinecraftChatBridge.showLocalMessage("[Stream Chat Bridge]");
+        MutableComponent twitchStatus = MinecraftChatBridge.twitch().append(MinecraftChatBridge.separator(": "));
 
-        MinecraftChatBridge.showLocalMessage("Account: " + account);
+        switch (eventSub.getConnectionState()) {
+            case CONNECTED -> twitchStatus.append(MinecraftChatBridge.success("Connected"));
 
-        MinecraftChatBridge.showLocalMessage("Channel: " + channel);
+            case CONNECTING -> twitchStatus.append(MinecraftChatBridge.warning("Connecting..."));
 
-        MinecraftChatBridge.showLocalMessage("Twitch: " + connection);
+            case DISCONNECTED -> twitchStatus.append(MinecraftChatBridge.error("Disconnected"));
+        }
 
-        MinecraftChatBridge.showLocalMessage("Minecraft → Twitch: " + (ConfigManager.get().twitchSendEnabled ? "ON" : "OFF"));
+        MinecraftChatBridge.showLocalMessage(twitchStatus);
+
+        MutableComponent outgoing = MinecraftChatBridge.label("Minecraft → ").append(MinecraftChatBridge.twitch()).append(MinecraftChatBridge.separator(": "));
+
+        if (ConfigManager.get().twitchSendEnabled) {
+            outgoing.append(MinecraftChatBridge.success("ON"));
+        } else {
+            outgoing.append(MinecraftChatBridge.error("OFF"));
+        }
+
+        MinecraftChatBridge.showLocalMessage(outgoing);
     }
 
     private static void reconnect() {
@@ -89,18 +100,18 @@ public final class StreamChatCommands {
         TwitchEventSubClient eventSub = StreamChatBridgeClient.getTwitchEventSub();
 
         if (!auth.isAuthenticated()) {
-            MinecraftChatBridge.showLocalMessage("[Stream Chat Bridge] Twitch account is not authenticated.");
+            MinecraftChatBridge.showLocalMessage(MinecraftChatBridge.systemMessage().append(MinecraftChatBridge.twitch()).append(MinecraftChatBridge.separator(": ")).append(MinecraftChatBridge.error("Account is not authenticated")));
 
             return;
         }
 
-        MinecraftChatBridge.showLocalMessage("[Stream Chat Bridge] Reconnecting...");
+        MinecraftChatBridge.showLocalMessage(MinecraftChatBridge.systemMessage().append(MinecraftChatBridge.twitch()).append(MinecraftChatBridge.separator(": ")).append(MinecraftChatBridge.warning("Reconnecting...")));
 
         Thread.startVirtualThread(() -> {
             String configuredChannel = ConfigManager.get().twitchChannel;
 
             if (!twitchClient.setChannel(configuredChannel)) {
-                MinecraftChatBridge.showLocalMessage("[Stream Chat Bridge] Twitch channel not found.");
+                MinecraftChatBridge.showLocalMessage(MinecraftChatBridge.systemMessage().append(MinecraftChatBridge.twitch()).append(MinecraftChatBridge.separator(": ")).append(MinecraftChatBridge.error("Channel not found")));
 
                 return;
             }
@@ -116,33 +127,23 @@ public final class StreamChatCommands {
     private static void waitForReconnectResult(TwitchEventSubClient eventSub) {
         long deadline = System.currentTimeMillis() + 15_000L;
 
-        /*
-         * reconnect() immediately transitions the client to
-         * CONNECTING. Wait for it to either become CONNECTED,
-         * fail back to DISCONNECTED, or exceed our feedback
-         * timeout.
-         */
         while (System.currentTimeMillis() < deadline) {
+
             TwitchEventSubClient.ConnectionState state = eventSub.getConnectionState();
 
             if (state == TwitchEventSubClient.ConnectionState.CONNECTED) {
 
-                MinecraftChatBridge.showLocalMessage("[Stream Chat Bridge] Connected.");
-
+                showConnectedMessage();
                 return;
             }
 
             if (state == TwitchEventSubClient.ConnectionState.DISCONNECTED) {
 
-                /*
-                 * Automatic reconnect may still be scheduled after
-                 * an unexpected failure, so give it a little time
-                 * instead of reporting failure immediately.
-                 */
                 try {
                     Thread.sleep(250L);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
+
                     return;
                 }
 
@@ -153,6 +154,7 @@ public final class StreamChatCommands {
                 Thread.sleep(100L);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+
                 return;
             }
         }
@@ -161,10 +163,14 @@ public final class StreamChatCommands {
 
         if (state == TwitchEventSubClient.ConnectionState.CONNECTED) {
 
-            MinecraftChatBridge.showLocalMessage("[Stream Chat Bridge] Connected.");
+            showConnectedMessage();
 
         } else {
-            MinecraftChatBridge.showLocalMessage("[Stream Chat Bridge] Reconnect is taking longer than expected.");
+            MinecraftChatBridge.showLocalMessage(MinecraftChatBridge.systemMessage().append(MinecraftChatBridge.twitch()).append(MinecraftChatBridge.separator(": ")).append(MinecraftChatBridge.warning("Reconnect is taking longer than expected")));
         }
+    }
+
+    private static void showConnectedMessage() {
+        MinecraftChatBridge.showLocalMessage(MinecraftChatBridge.systemMessage().append(MinecraftChatBridge.twitch()).append(MinecraftChatBridge.separator(": ")).append(MinecraftChatBridge.success("Connected")));
     }
 }
