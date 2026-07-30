@@ -2,10 +2,13 @@ package com.kryp.streamchatbridge;
 
 import com.kryp.streamchatbridge.config.ConfigManager;
 import com.kryp.streamchatbridge.minecraft.MinecraftChatBridge;
+import com.kryp.streamchatbridge.minecraft.StreamChatCommands;
+import com.kryp.streamchatbridge.minecraft.StreamChatKeybinds;
 import com.kryp.streamchatbridge.twitch.TwitchAuth;
 import com.kryp.streamchatbridge.twitch.TwitchClient;
 import com.kryp.streamchatbridge.twitch.TwitchEventSubClient;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 
 public class StreamChatBridgeClient implements ClientModInitializer {
 
@@ -23,6 +26,15 @@ public class StreamChatBridgeClient implements ClientModInitializer {
 
         MinecraftChatBridge.registerOutgoing(TWITCH_CLIENT);
 
+        StreamChatCommands.register();
+        StreamChatKeybinds.register();
+
+        ClientLifecycleEvents.CLIENT_STOPPING.register(client -> {
+            System.out.println("[Stream Chat Bridge] Shutting down...");
+
+            TWITCH_EVENT_SUB.shutdown();
+        });
+
         System.out.println("[Stream Chat Bridge] Loaded");
 
         Thread.startVirtualThread(() -> {
@@ -31,12 +43,14 @@ public class StreamChatBridgeClient implements ClientModInitializer {
                 return;
             }
 
-            System.out.println("[Stream Chat Bridge] No Twitch account connected.");
+            System.out.println("[Stream Chat Bridge] No valid Twitch session found.");
 
             System.out.println("[Stream Chat Bridge] Starting Twitch authentication...");
 
             if (TWITCH_AUTH.authenticate()) {
                 onTwitchAuthenticated();
+            } else {
+                System.err.println("[Stream Chat Bridge] Twitch authentication was not completed.");
             }
         });
     }
@@ -48,6 +62,7 @@ public class StreamChatBridgeClient implements ClientModInitializer {
 
         if (!TWITCH_CLIENT.setChannel(configuredChannel)) {
             System.err.println("[Stream Chat Bridge] Could not use configured Twitch channel: " + configuredChannel);
+
             return;
         }
 

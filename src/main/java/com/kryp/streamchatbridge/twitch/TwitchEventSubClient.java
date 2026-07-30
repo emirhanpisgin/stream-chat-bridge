@@ -11,62 +11,135 @@ import java.net.http.WebSocket;
 import java.time.Duration;
 import java.util.concurrent.CompletionStage;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 public final class TwitchEventSubClient implements WebSocket.Listener {
 
-    private static final String WEBSOCKET_URL = "wss://eventsub.wss.twitch.tv/ws";
+    public enum ConnectionState {
+        DISCONNECTED, CONNECTING, CONNECTED
+    }
+
+    private static final String DEFAULT_WEBSOCKET_URL = "wss://eventsub.wss.twitch.tv/ws";
 
     private static final String SUBSCRIPTIONS_URL = "https://api.twitch.tv/helix/eventsub/subscriptions";
+
+    private static final long RECONNECT_DELAY_MS = 3_000L;
 
     private static final Gson GSON = new Gson();
 
     private final TwitchAuth auth;
+
     private final BiConsumer<String, String> messageHandler;
 
     private final HttpClient httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
-    private WebSocket webSocket;
-    private boolean connected;
-
     private final StringBuilder messageBuffer = new StringBuilder();
 
-    private String channelId;
+    private volatile ConnectionState connectionState = ConnectionState.DISCONNECTED;
+
+    private volatile Consumer<ConnectionState> stateListener;
+
+    private volatile WebSocket webSocket;
+
+    private volatile String channelId;
+
+    private volatile boolean shouldStayConnected = false;
+
+    private volatile boolean shuttingDown = false;
+
+    private volatile boolean reconnectScheduled = false;
+
+    private volatile long connectionGeneration = 0;
 
     public TwitchEventSubClient(TwitchAuth auth, BiConsumer<String, String> messageHandler) {
         this.auth = auth;
         this.messageHandler = messageHandler;
     }
 
-    public void connect() {
-        if (!auth.isAuthenticated()) {
-            System.err.println("[Stream Chat Bridge] Cannot connect to Twitch chat: not authenticated.");
+    public synchronized void connect() {
+        if (shuttingDown) {
             return;
         }
 
-        if (channelId == null) {
-            System.err.println("[Stream Chat Bridge] Cannot connect to Twitch chat: no channel selected.");
+        shouldStayConnected = true;
+
+        if (!canConnect()) {
+            shouldStayConnected = false;
             return;
         }
 
-        if (connected) {
+        if (connectionState == ConnectionState.CONNECTING || connectionState == ConnectionState.CONNECTED) {
             return;
         }
 
-        System.out.println("[Stream Chat Bridge] Connecting to Twitch EventSub...");
-
-        httpClient.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(10)).buildAsync(URI.create(WEBSOCKET_URL), this).exceptionally(error -> {
-            System.err.println("[Stream Chat Bridge] EventSub connection failed: " + error.getMessage());
-            return null;
-        });
+        connectTo(DEFAULT_WEBSOCKET_URL, false);
     }
 
-    public void disconnect() {
-        connected = false;
+    public synchronized void reconnect() {
+        if (shuttingDown) {
+            return;
+        }
 
-        if (webSocket != null) {
-            webSocket.sendClose(WebSocket.NORMAL_CLOSURE, "Disconnecting");
+        shouldStayConnected = true;
 
-            webSocket = null;
+        if (!canConnect()) {
+            shouldStayConnected = false;
+            return;
+        }
+
+        reconnectScheduled = false;
+
+        WebSocket oldSocket = webSocket;
+
+        webSocket = null;
+
+        connectionGeneration++;
+
+        setConnectionState(ConnectionState.CONNECTING);
+
+        if (oldSocket != null) {
+            oldSocket.sendClose(WebSocket.NORMAL_CLOSURE, "Reconnecting");
+        }
+
+        connectTo(DEFAULT_WEBSOCKET_URL, false);
+    }
+
+    public synchronized void disconnect() {
+        shouldStayConnected = false;
+        reconnectScheduled = false;
+
+        connectionGeneration++;
+
+        WebSocket socket = webSocket;
+
+        webSocket = null;
+
+        messageBuffer.setLength(0);
+
+        setConnectionState(ConnectionState.DISCONNECTED);
+
+        if (socket != null) {
+            socket.sendClose(WebSocket.NORMAL_CLOSURE, "Disconnecting");
+        }
+    }
+
+    public synchronized void shutdown() {
+        shuttingDown = true;
+        shouldStayConnected = false;
+        reconnectScheduled = false;
+
+        connectionGeneration++;
+
+        WebSocket socket = webSocket;
+
+        webSocket = null;
+
+        messageBuffer.setLength(0);
+
+        setConnectionState(ConnectionState.DISCONNECTED);
+
+        if (socket != null) {
+            socket.sendClose(WebSocket.NORMAL_CLOSURE, "Minecraft shutting down");
         }
     }
 
@@ -74,51 +147,161 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
         this.channelId = channelId;
     }
 
-    @Override
-    public void onOpen(WebSocket webSocket) {
-        this.webSocket = webSocket;
-
-        System.out.println("[Stream Chat Bridge] EventSub WebSocket opened.");
-
-        webSocket.request(1);
+    public void setStateListener(Consumer<ConnectionState> stateListener) {
+        this.stateListener = stateListener;
     }
 
-    @Override
-    public CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last) {
-        messageBuffer.append(data);
+    public boolean isConnected() {
+        return connectionState == ConnectionState.CONNECTED;
+    }
 
-        if (last) {
-            String message = messageBuffer.toString();
-            messageBuffer.setLength(0);
+    public ConnectionState getConnectionState() {
+        return connectionState;
+    }
 
-            try {
-                handleMessage(message);
-            } catch (Exception e) {
-                System.err.println("[Stream Chat Bridge] Failed to handle EventSub message: " + e.getMessage());
-            }
+    private boolean canConnect() {
+        if (!auth.isAuthenticated()) {
+            System.err.println("[Stream Chat Bridge] Cannot connect to Twitch chat: not authenticated.");
+
+            setConnectionState(ConnectionState.DISCONNECTED);
+
+            return false;
         }
 
-        webSocket.request(1);
-        return null;
+        if (channelId == null || channelId.isBlank()) {
+            System.err.println("[Stream Chat Bridge] Cannot connect to Twitch chat: no channel selected.");
+
+            setConnectionState(ConnectionState.DISCONNECTED);
+
+            return false;
+        }
+
+        return true;
     }
 
-    @Override
-    public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
-        connected = false;
+    private synchronized void connectTo(String url, boolean twitchReconnect) {
+        if (shuttingDown || !shouldStayConnected) {
+            return;
+        }
 
-        System.out.println("[Stream Chat Bridge] EventSub disconnected: " + statusCode + " " + reason);
+        long generation = ++connectionGeneration;
 
-        return null;
+        reconnectScheduled = false;
+
+        setConnectionState(ConnectionState.CONNECTING);
+
+        if (twitchReconnect) {
+            System.out.println("[Stream Chat Bridge] Migrating Twitch EventSub connection...");
+        } else {
+            System.out.println("[Stream Chat Bridge] Connecting to Twitch EventSub...");
+        }
+
+        EventSubSocketListener listener = new EventSubSocketListener(generation, twitchReconnect);
+
+        httpClient.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(10)).buildAsync(URI.create(url), listener).exceptionally(error -> {
+            handleConnectionFailure(generation, error);
+
+            return null;
+        });
     }
 
-    @Override
-    public void onError(WebSocket webSocket, Throwable error) {
-        connected = false;
+    private synchronized void handleConnectionFailure(long generation, Throwable error) {
+        if (generation != connectionGeneration) {
+            return;
+        }
 
-        System.err.println("[Stream Chat Bridge] EventSub error: " + error.getMessage());
+        webSocket = null;
+
+        System.err.println("[Stream Chat Bridge] EventSub connection failed: " + error.getMessage());
+
+        setConnectionState(ConnectionState.DISCONNECTED);
+
+        scheduleReconnect();
     }
 
-    private void handleMessage(String json) {
+    private synchronized void scheduleReconnect() {
+        if (shuttingDown || !shouldStayConnected || reconnectScheduled) {
+            return;
+        }
+
+        reconnectScheduled = true;
+
+        System.out.println("[Stream Chat Bridge] Twitch connection lost. Reconnecting in 3 seconds...");
+
+        Thread.startVirtualThread(() -> {
+            try {
+                Thread.sleep(RECONNECT_DELAY_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+
+            synchronized (this) {
+                reconnectScheduled = false;
+
+                if (shuttingDown || !shouldStayConnected) {
+                    return;
+                }
+
+                if (connectionState != ConnectionState.DISCONNECTED) {
+                    return;
+                }
+
+                if (!canConnect()) {
+                    return;
+                }
+
+                connectTo(DEFAULT_WEBSOCKET_URL, false);
+            }
+        });
+    }
+
+    private synchronized void handleTwitchReconnect(JsonObject root, long generation) {
+        if (generation != connectionGeneration || shuttingDown || !shouldStayConnected) {
+            return;
+        }
+
+        JsonObject payload = root.getAsJsonObject("payload");
+
+        if (payload == null) {
+            return;
+        }
+
+        JsonObject session = payload.getAsJsonObject("session");
+
+        if (session == null || !session.has("reconnect_url")) {
+            return;
+        }
+
+        String reconnectUrl = session.get("reconnect_url").getAsString();
+
+        if (reconnectUrl == null || reconnectUrl.isBlank()) {
+            return;
+        }
+
+        System.out.println("[Stream Chat Bridge] Twitch requested EventSub migration.");
+
+        /*
+         * Do NOT close the old socket here.
+         *
+         * Twitch's reconnect flow expects the client to open the
+         * supplied reconnect URL first. Twitch will close the old
+         * connection after the new session has been established.
+         */
+        connectTo(reconnectUrl, true);
+    }
+
+    private void setConnectionState(ConnectionState state) {
+        connectionState = state;
+
+        Consumer<ConnectionState> listener = stateListener;
+
+        if (listener != null) {
+            listener.accept(state);
+        }
+    }
+
+    private void handleMessage(String json, long generation, boolean twitchReconnect) {
         JsonObject root = GSON.fromJson(json, JsonObject.class);
 
         JsonObject metadata = root.getAsJsonObject("metadata");
@@ -130,35 +313,63 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
         String type = metadata.get("message_type").getAsString();
 
         switch (type) {
-            case "session_welcome" -> handleWelcome(root);
+            case "session_welcome" -> handleWelcome(root, generation, twitchReconnect);
+
             case "notification" -> handleNotification(root);
 
             case "session_keepalive" -> {
             }
 
-            case "session_reconnect" -> System.out.println("[Stream Chat Bridge] Twitch requested EventSub reconnect.");
+            case "session_reconnect" -> handleTwitchReconnect(root, generation);
 
-            case "revocation" -> System.err.println("[Stream Chat Bridge] Twitch EventSub subscription revoked.");
+            case "revocation" -> handleRevocation(root, generation);
 
             default -> {
             }
         }
     }
 
-    private void handleWelcome(JsonObject root) {
-        JsonObject session = root.getAsJsonObject("payload").getAsJsonObject("session");
+    private void handleWelcome(JsonObject root, long generation, boolean twitchReconnect) {
+        if (generation != connectionGeneration) {
+            return;
+        }
+
+        JsonObject payload = root.getAsJsonObject("payload");
+
+        if (payload == null) {
+            return;
+        }
+
+        JsonObject session = payload.getAsJsonObject("session");
+
+        if (session == null || !session.has("id")) {
+            return;
+        }
 
         String sessionId = session.get("id").getAsString();
 
-        connected = true;
+        if (twitchReconnect) {
+            /*
+             * Existing EventSub subscriptions move with Twitch's
+             * reconnect session. Creating another subscription here
+             * would duplicate it.
+             */
+            System.out.println("[Stream Chat Bridge] Twitch EventSub migration complete.");
 
-        System.out.println("[Stream Chat Bridge] EventSub connected. Session: " + sessionId);
+            setConnectionState(ConnectionState.CONNECTED);
 
-        Thread.startVirtualThread(() -> createChatSubscription(sessionId));
+            return;
+        }
+
+        Thread.startVirtualThread(() -> createChatSubscription(sessionId, generation));
     }
 
-    private void createChatSubscription(String sessionId) {
+    private void createChatSubscription(String sessionId, long generation) {
         try {
+            if (generation != connectionGeneration || shuttingDown || !shouldStayConnected) {
+                return;
+            }
+
             JsonObject condition = new JsonObject();
 
             condition.addProperty("broadcaster_user_id", channelId);
@@ -166,28 +377,95 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
             condition.addProperty("user_id", auth.getUserId());
 
             JsonObject transport = new JsonObject();
+
             transport.addProperty("method", "websocket");
+
             transport.addProperty("session_id", sessionId);
 
             JsonObject body = new JsonObject();
+
             body.addProperty("type", "channel.chat.message");
+
             body.addProperty("version", "1");
+
             body.add("condition", condition);
+
             body.add("transport", transport);
 
             HttpRequest request = HttpRequest.newBuilder().uri(URI.create(SUBSCRIPTIONS_URL)).header("Authorization", "Bearer " + auth.getAccessToken()).header("Client-Id", TwitchAuth.CLIENT_ID).header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(GSON.toJson(body))).build();
 
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
+            if (generation != connectionGeneration) {
+                return;
+            }
+
             if (response.statusCode() != 202) {
                 System.err.println("[Stream Chat Bridge] Failed to subscribe to Twitch chat. HTTP " + response.statusCode() + ": " + response.body());
+
+                WebSocket socket = webSocket;
+
+                webSocket = null;
+
+                setConnectionState(ConnectionState.DISCONNECTED);
+
+                if (socket != null) {
+                    socket.sendClose(WebSocket.NORMAL_CLOSURE, "Subscription failed");
+                }
+
+                scheduleReconnect();
+
                 return;
             }
 
             System.out.println("[Stream Chat Bridge] Twitch chat subscription active.");
 
+            setConnectionState(ConnectionState.CONNECTED);
+
         } catch (Exception e) {
+            if (generation != connectionGeneration) {
+                return;
+            }
+
             System.err.println("[Stream Chat Bridge] Failed to create Twitch chat subscription: " + e.getMessage());
+
+            WebSocket socket = webSocket;
+
+            webSocket = null;
+
+            setConnectionState(ConnectionState.DISCONNECTED);
+
+            if (socket != null) {
+                socket.sendClose(WebSocket.NORMAL_CLOSURE, "Subscription failed");
+            }
+
+            scheduleReconnect();
+        }
+    }
+
+    private void handleRevocation(JsonObject root, long generation) {
+        if (generation != connectionGeneration) {
+            return;
+        }
+
+        System.err.println("[Stream Chat Bridge] Twitch EventSub subscription revoked.");
+
+        /*
+         * A revoked subscription should not create an endless
+         * reconnect loop. The WebSocket may still be healthy, but
+         * chat delivery is no longer active.
+         */
+        shouldStayConnected = false;
+        reconnectScheduled = false;
+
+        WebSocket socket = webSocket;
+
+        webSocket = null;
+
+        setConnectionState(ConnectionState.DISCONNECTED);
+
+        if (socket != null) {
+            socket.sendClose(WebSocket.NORMAL_CLOSURE, "Subscription revoked");
         }
     }
 
@@ -210,18 +488,120 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
             return;
         }
 
+        if (!event.has("chatter_user_name") || !event.has("message")) {
+            return;
+        }
+
+        JsonObject messageObject = event.getAsJsonObject("message");
+
+        if (messageObject == null || !messageObject.has("text")) {
+            return;
+        }
+
         String username = event.get("chatter_user_name").getAsString();
 
-        String message = event.getAsJsonObject("message").get("text").getAsString();
-
-        System.out.println("[Twitch] " + username + ": " + message);
+        String message = messageObject.get("text").getAsString();
 
         if (messageHandler != null) {
             messageHandler.accept(username, message);
         }
     }
 
-    public boolean isConnected() {
-        return connected;
+    private final class EventSubSocketListener implements WebSocket.Listener {
+
+        private final long generation;
+        private final boolean twitchReconnect;
+
+        private final StringBuilder buffer = new StringBuilder();
+
+        private EventSubSocketListener(long generation, boolean twitchReconnect) {
+            this.generation = generation;
+
+            this.twitchReconnect = twitchReconnect;
+        }
+
+        @Override
+        public void onOpen(WebSocket socket) {
+            synchronized (TwitchEventSubClient.this) {
+                if (generation != connectionGeneration || shuttingDown || !shouldStayConnected) {
+
+                    socket.sendClose(WebSocket.NORMAL_CLOSURE, "Stale connection");
+
+                    return;
+                }
+
+                webSocket = socket;
+            }
+
+            System.out.println("[Stream Chat Bridge] EventSub WebSocket opened.");
+
+            socket.request(1);
+        }
+
+        @Override
+        public CompletionStage<?> onText(WebSocket socket, CharSequence data, boolean last) {
+            if (generation != connectionGeneration) {
+                socket.request(1);
+                return null;
+            }
+
+            buffer.append(data);
+
+            if (last) {
+                String message = buffer.toString();
+
+                buffer.setLength(0);
+
+                try {
+                    handleMessage(message, generation, twitchReconnect);
+                } catch (Exception e) {
+                    System.err.println("[Stream Chat Bridge] Failed to handle EventSub message: " + e.getMessage());
+                }
+            }
+
+            socket.request(1);
+
+            return null;
+        }
+
+        @Override
+        public CompletionStage<?> onClose(WebSocket socket, int statusCode, String reason) {
+            synchronized (TwitchEventSubClient.this) {
+                if (generation != connectionGeneration) {
+                    return null;
+                }
+
+                if (webSocket == socket) {
+                    webSocket = null;
+                }
+
+                System.out.println("[Stream Chat Bridge] EventSub disconnected: " + statusCode + " " + reason);
+
+                setConnectionState(ConnectionState.DISCONNECTED);
+
+                scheduleReconnect();
+            }
+
+            return null;
+        }
+
+        @Override
+        public void onError(WebSocket socket, Throwable error) {
+            synchronized (TwitchEventSubClient.this) {
+                if (generation != connectionGeneration) {
+                    return;
+                }
+
+                if (webSocket == socket) {
+                    webSocket = null;
+                }
+
+                System.err.println("[Stream Chat Bridge] EventSub error: " + error.getMessage());
+
+                setConnectionState(ConnectionState.DISCONNECTED);
+
+                scheduleReconnect();
+            }
+        }
     }
 }
