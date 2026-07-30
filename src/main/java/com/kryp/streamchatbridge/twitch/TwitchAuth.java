@@ -27,15 +27,11 @@ public final class TwitchAuth {
     private static final String TOKEN_URL = "https://id.twitch.tv/oauth2/token";
     private static final String USERS_URL = "https://api.twitch.tv/helix/users";
 
-    private static final Path TOKEN_PATH = FabricLoader.getInstance()
-            .getConfigDir()
-            .resolve("streamchatbridge-twitch.json");
+    private static final Path TOKEN_PATH = FabricLoader.getInstance().getConfigDir().resolve("streamchatbridge-twitch.json");
 
     private static final Gson GSON = new Gson();
 
-    private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(10))
-            .build();
+    private final HttpClient httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
     private String accessToken;
     private String refreshToken;
@@ -115,9 +111,7 @@ public final class TwitchAuth {
                     continue;
                 }
 
-                throw new IOException(
-                        message != null ? message : "Twitch authentication failed"
-                );
+                throw new IOException(message != null ? message : "Twitch authentication failed");
             }
 
             throw new IOException("Twitch authorization expired");
@@ -142,69 +136,37 @@ public final class TwitchAuth {
     }
 
     private JsonObject requestDeviceCode() throws IOException, InterruptedException {
-        String body =
-                "client_id=" + encode(CLIENT_ID) +
-                        "&scopes=" + encode(SCOPES);
+        String body = "client_id=" + encode(CLIENT_ID) + "&scopes=" + encode(SCOPES);
 
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(DEVICE_URL))
-                .header("Content-Type", "application/x-www-form-urlencoded")
-                .POST(HttpRequest.BodyPublishers.ofString(body))
-                .build();
+        HttpRequest request = HttpRequest.newBuilder().uri(URI.create(DEVICE_URL)).header("Content-Type", "application/x-www-form-urlencoded").POST(HttpRequest.BodyPublishers.ofString(body)).build();
 
-        HttpResponse<String> response = httpClient.send(
-                request,
-                HttpResponse.BodyHandlers.ofString()
-        );
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
         if (response.statusCode() != 200) {
-            throw new IOException("Device authorization returned HTTP " + response.statusCode()
-                    + ": " + response.body());
+            throw new IOException("Device authorization returned HTTP " + response.statusCode() + ": " + response.body());
         }
 
         return GSON.fromJson(response.body(), JsonObject.class);
     }
 
-    private JsonObject requestDeviceToken(String deviceCode)
-            throws IOException, InterruptedException {
+    private JsonObject requestDeviceToken(String deviceCode) throws IOException, InterruptedException {
 
-        String body =
-                "client_id=" + encode(CLIENT_ID) +
-                        "&scopes=" + encode(SCOPES) +
-                        "&device_code=" + encode(deviceCode) +
-                        "&grant_type=" + encode("urn:ietf:params:oauth:grant-type:device_code");
+        String body = "client_id=" + encode(CLIENT_ID) + "&scopes=" + encode(SCOPES) + "&device_code=" + encode(deviceCode) + "&grant_type=" + encode("urn:ietf:params:oauth:grant-type:device_code");
 
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(TOKEN_URL))
-                .header("Content-Type", "application/x-www-form-urlencoded")
-                .POST(HttpRequest.BodyPublishers.ofString(body))
-                .build();
+        HttpRequest request = HttpRequest.newBuilder().uri(URI.create(TOKEN_URL)).header("Content-Type", "application/x-www-form-urlencoded").POST(HttpRequest.BodyPublishers.ofString(body)).build();
 
-        HttpResponse<String> response = httpClient.send(
-                request,
-                HttpResponse.BodyHandlers.ofString()
-        );
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
         return GSON.fromJson(response.body(), JsonObject.class);
     }
 
     private boolean refreshAccessToken() {
         try {
-            String body =
-                    "client_id=" + encode(CLIENT_ID) +
-                            "&grant_type=refresh_token" +
-                            "&refresh_token=" + encode(refreshToken);
+            String body = "client_id=" + encode(CLIENT_ID) + "&grant_type=refresh_token" + "&refresh_token=" + encode(refreshToken);
 
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(TOKEN_URL))
-                    .header("Content-Type", "application/x-www-form-urlencoded")
-                    .POST(HttpRequest.BodyPublishers.ofString(body))
-                    .build();
+            HttpRequest request = HttpRequest.newBuilder().uri(URI.create(TOKEN_URL)).header("Content-Type", "application/x-www-form-urlencoded").POST(HttpRequest.BodyPublishers.ofString(body)).build();
 
-            HttpResponse<String> response = httpClient.send(
-                    request,
-                    HttpResponse.BodyHandlers.ofString()
-            );
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
             if (response.statusCode() != 200) {
                 return false;
@@ -230,17 +192,9 @@ public final class TwitchAuth {
 
     private boolean loadCurrentUser() {
         try {
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(USERS_URL))
-                    .header("Authorization", "Bearer " + accessToken)
-                    .header("Client-Id", CLIENT_ID)
-                    .GET()
-                    .build();
+            HttpRequest request = HttpRequest.newBuilder().uri(URI.create(USERS_URL)).header("Authorization", "Bearer " + accessToken).header("Client-Id", CLIENT_ID).GET().build();
 
-            HttpResponse<String> response = httpClient.send(
-                    request,
-                    HttpResponse.BodyHandlers.ofString()
-            );
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
             if (response.statusCode() != 200) {
                 return false;
@@ -252,9 +206,7 @@ public final class TwitchAuth {
                 return false;
             }
 
-            JsonObject user = json.getAsJsonArray("data")
-                    .get(0)
-                    .getAsJsonObject();
+            JsonObject user = json.getAsJsonArray("data").get(0).getAsJsonObject();
 
             userId = user.get("id").getAsString();
             username = user.get("display_name").getAsString();
@@ -274,12 +226,7 @@ public final class TwitchAuth {
 
         Files.createDirectories(TOKEN_PATH.getParent());
 
-        Files.writeString(
-                TOKEN_PATH,
-                GSON.toJson(json),
-                StandardOpenOption.CREATE,
-                StandardOpenOption.TRUNCATE_EXISTING
-        );
+        Files.writeString(TOKEN_PATH, GSON.toJson(json), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
     }
 
     private void openBrowser(String url) {
@@ -294,6 +241,38 @@ public final class TwitchAuth {
 
     private static String encode(String value) {
         return URLEncoder.encode(value, StandardCharsets.UTF_8);
+    }
+
+    public String findUserId(String login) {
+        if (!isAuthenticated() || login == null || login.isBlank()) {
+            return null;
+        }
+
+        try {
+            String url = USERS_URL + "?login=" + encode(login.trim());
+
+            HttpRequest request = HttpRequest.newBuilder().uri(URI.create(url)).header("Authorization", "Bearer " + accessToken).header("Client-Id", CLIENT_ID).GET().build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() != 200) {
+                System.err.println("[Stream Chat Bridge] Twitch channel lookup failed. HTTP " + response.statusCode());
+                return null;
+            }
+
+            JsonObject json = GSON.fromJson(response.body(), JsonObject.class);
+
+            if (!json.has("data") || json.getAsJsonArray("data").isEmpty()) {
+                return null;
+            }
+
+            return json.getAsJsonArray("data").get(0).getAsJsonObject().get("id").getAsString();
+
+        } catch (Exception e) {
+            System.err.println("[Stream Chat Bridge] Twitch channel lookup failed: " + e.getMessage());
+
+            return null;
+        }
     }
 
     private static String getString(JsonObject object, String key) {

@@ -44,6 +44,15 @@ public class StreamChatBridgeClient implements ClientModInitializer {
     private void onTwitchAuthenticated() {
         System.out.println("[Stream Chat Bridge] Twitch authenticated as: " + TWITCH_AUTH.getUsername());
 
+        String configuredChannel = ConfigManager.get().twitchChannel;
+
+        if (!TWITCH_CLIENT.setChannel(configuredChannel)) {
+            System.err.println("[Stream Chat Bridge] Could not use configured Twitch channel: " + configuredChannel);
+            return;
+        }
+
+        TWITCH_EVENT_SUB.setChannelId(TWITCH_CLIENT.getChannelId());
+
         TWITCH_EVENT_SUB.connect();
     }
 

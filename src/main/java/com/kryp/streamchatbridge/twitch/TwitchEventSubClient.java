@@ -30,6 +30,8 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
 
     private final StringBuilder messageBuffer = new StringBuilder();
 
+    private String channelId;
+
     public TwitchEventSubClient(TwitchAuth auth, BiConsumer<String, String> messageHandler) {
         this.auth = auth;
         this.messageHandler = messageHandler;
@@ -38,6 +40,11 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
     public void connect() {
         if (!auth.isAuthenticated()) {
             System.err.println("[Stream Chat Bridge] Cannot connect to Twitch chat: not authenticated.");
+            return;
+        }
+
+        if (channelId == null) {
+            System.err.println("[Stream Chat Bridge] Cannot connect to Twitch chat: no channel selected.");
             return;
         }
 
@@ -61,6 +68,10 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
 
             webSocket = null;
         }
+    }
+
+    public void setChannelId(String channelId) {
+        this.channelId = channelId;
     }
 
     @Override
@@ -150,7 +161,7 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
         try {
             JsonObject condition = new JsonObject();
 
-            condition.addProperty("broadcaster_user_id", auth.getUserId());
+            condition.addProperty("broadcaster_user_id", channelId);
 
             condition.addProperty("user_id", auth.getUserId());
 
@@ -173,7 +184,7 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
                 return;
             }
 
-            System.out.println("[Stream Chat Bridge] Listening to Twitch chat for " + auth.getUsername());
+            System.out.println("[Stream Chat Bridge] Twitch chat subscription active.");
 
         } catch (Exception e) {
             System.err.println("[Stream Chat Bridge] Failed to create Twitch chat subscription: " + e.getMessage());

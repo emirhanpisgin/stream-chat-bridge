@@ -19,13 +19,44 @@ public final class TwitchClient {
 
     private final HttpClient httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
+    private String channelId;
+
     public TwitchClient(TwitchAuth auth) {
         this.auth = auth;
+    }
+
+    public boolean setChannel(String channel) {
+        if (!auth.isAuthenticated()) {
+            return false;
+        }
+
+        if (channel == null || channel.isBlank()) {
+            channelId = auth.getUserId();
+            return true;
+        }
+
+        String id = auth.findUserId(channel);
+
+        if (id == null) {
+            System.err.println("[Stream Chat Bridge] Twitch channel not found: " + channel);
+            return false;
+        }
+
+        channelId = id;
+
+        System.out.println("[Stream Chat Bridge] Twitch channel set to: " + channel);
+
+        return true;
     }
 
     public boolean sendMessage(String message) {
         if (!auth.isAuthenticated()) {
             System.err.println("[Stream Chat Bridge] Cannot send Twitch message: not authenticated.");
+            return false;
+        }
+
+        if (channelId == null) {
+            System.err.println("[Stream Chat Bridge] Cannot send Twitch message: no channel selected.");
             return false;
         }
 
@@ -36,7 +67,7 @@ public final class TwitchClient {
         try {
             JsonObject body = new JsonObject();
 
-            body.addProperty("broadcaster_id", auth.getUserId());
+            body.addProperty("broadcaster_id", channelId);
             body.addProperty("sender_id", auth.getUserId());
             body.addProperty("message", message);
 
@@ -74,8 +105,6 @@ public final class TwitchClient {
                 }
             }
 
-            System.out.println("[Stream Chat Bridge] Sent Twitch message: " + message);
-
             return true;
 
         } catch (Exception e) {
@@ -83,5 +112,9 @@ public final class TwitchClient {
 
             return false;
         }
+    }
+
+    public String getChannelId() {
+        return channelId;
     }
 }
