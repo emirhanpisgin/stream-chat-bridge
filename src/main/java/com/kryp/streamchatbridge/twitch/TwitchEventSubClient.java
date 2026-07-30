@@ -13,7 +13,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
-public final class TwitchEventSubClient implements WebSocket.Listener {
+public final class TwitchEventSubClient {
 
     public enum ConnectionState {
         DISCONNECTED, CONNECTING, CONNECTED
@@ -23,7 +23,7 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
 
     private static final String SUBSCRIPTIONS_URL = "https://api.twitch.tv/helix/eventsub/subscriptions";
 
-    private static final long RECONNECT_DELAY_MS = 3_000L;
+    private static final long[] RECONNECT_DELAYS_MS = {1_000L, 2_000L, 4_000L, 8_000L, 15_000L, 30_000L};
 
     private static final Gson GSON = new Gson();
 
@@ -32,8 +32,6 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
     private final BiConsumer<String, String> messageHandler;
 
     private final HttpClient httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
-
-    private final StringBuilder messageBuffer = new StringBuilder();
 
     private volatile ConnectionState connectionState = ConnectionState.DISCONNECTED;
 
@@ -48,6 +46,8 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
     private volatile boolean shuttingDown = false;
 
     private volatile boolean reconnectScheduled = false;
+
+    private volatile int reconnectAttempt = 0;
 
     private volatile long connectionGeneration = 0;
 
@@ -72,6 +72,8 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
             return;
         }
 
+        resetReconnectBackoff();
+
         connectTo(DEFAULT_WEBSOCKET_URL, false);
     }
 
@@ -88,6 +90,8 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
         }
 
         reconnectScheduled = false;
+
+        resetReconnectBackoff();
 
         WebSocket oldSocket = webSocket;
 
@@ -108,13 +112,13 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
         shouldStayConnected = false;
         reconnectScheduled = false;
 
+        resetReconnectBackoff();
+
         connectionGeneration++;
 
         WebSocket socket = webSocket;
 
         webSocket = null;
-
-        messageBuffer.setLength(0);
 
         setConnectionState(ConnectionState.DISCONNECTED);
 
@@ -128,13 +132,13 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
         shouldStayConnected = false;
         reconnectScheduled = false;
 
+        resetReconnectBackoff();
+
         connectionGeneration++;
 
         WebSocket socket = webSocket;
 
         webSocket = null;
-
-        messageBuffer.setLength(0);
 
         setConnectionState(ConnectionState.DISCONNECTED);
 
@@ -224,13 +228,17 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
             return;
         }
 
+        long delay = RECONNECT_DELAYS_MS[Math.min(reconnectAttempt, RECONNECT_DELAYS_MS.length - 1)];
+
+        reconnectAttempt++;
+
         reconnectScheduled = true;
 
-        System.out.println("[Stream Chat Bridge] Twitch connection lost. Reconnecting in 3 seconds...");
+        System.out.println("[Stream Chat Bridge] Twitch connection lost. Reconnecting in " + formatDelay(delay) + "...");
 
         Thread.startVirtualThread(() -> {
             try {
-                Thread.sleep(RECONNECT_DELAY_MS);
+                Thread.sleep(delay);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
@@ -254,6 +262,20 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
                 connectTo(DEFAULT_WEBSOCKET_URL, false);
             }
         });
+    }
+
+    private synchronized void resetReconnectBackoff() {
+        reconnectAttempt = 0;
+    }
+
+    private String formatDelay(long delayMs) {
+        if (delayMs % 1_000L == 0) {
+            long seconds = delayMs / 1_000L;
+
+            return seconds + (seconds == 1 ? " second" : " seconds");
+        }
+
+        return delayMs + " ms";
     }
 
     private synchronized void handleTwitchReconnect(JsonObject root, long generation) {
@@ -281,13 +303,6 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
 
         System.out.println("[Stream Chat Bridge] Twitch requested EventSub migration.");
 
-        /*
-         * Do NOT close the old socket here.
-         *
-         * Twitch's reconnect flow expects the client to open the
-         * supplied reconnect URL first. Twitch will close the old
-         * connection after the new session has been established.
-         */
         connectTo(reconnectUrl, true);
     }
 
@@ -349,12 +364,9 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
         String sessionId = session.get("id").getAsString();
 
         if (twitchReconnect) {
-            /*
-             * Existing EventSub subscriptions move with Twitch's
-             * reconnect session. Creating another subscription here
-             * would duplicate it.
-             */
             System.out.println("[Stream Chat Bridge] Twitch EventSub migration complete.");
+
+            resetReconnectBackoff();
 
             setConnectionState(ConnectionState.CONNECTED);
 
@@ -420,6 +432,8 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
 
             System.out.println("[Stream Chat Bridge] Twitch chat subscription active.");
 
+            resetReconnectBackoff();
+
             setConnectionState(ConnectionState.CONNECTED);
 
         } catch (Exception e) {
@@ -450,13 +464,10 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
 
         System.err.println("[Stream Chat Bridge] Twitch EventSub subscription revoked.");
 
-        /*
-         * A revoked subscription should not create an endless
-         * reconnect loop. The WebSocket may still be healthy, but
-         * chat delivery is no longer active.
-         */
         shouldStayConnected = false;
         reconnectScheduled = false;
+
+        resetReconnectBackoff();
 
         WebSocket socket = webSocket;
 
@@ -510,13 +521,13 @@ public final class TwitchEventSubClient implements WebSocket.Listener {
     private final class EventSubSocketListener implements WebSocket.Listener {
 
         private final long generation;
+
         private final boolean twitchReconnect;
 
         private final StringBuilder buffer = new StringBuilder();
 
         private EventSubSocketListener(long generation, boolean twitchReconnect) {
             this.generation = generation;
-
             this.twitchReconnect = twitchReconnect;
         }
 
