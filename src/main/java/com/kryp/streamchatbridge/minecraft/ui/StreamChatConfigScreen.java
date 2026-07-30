@@ -46,12 +46,21 @@ public final class StreamChatConfigScreen extends Screen {
         int bottomWidth = 300;
         int bottomLeft = width / 2 - bottomWidth / 2;
 
-        addRenderableWidget(Button.builder(Component.literal("Settings"), button -> {
+        addRenderableWidget(Button.builder(Component.literal("Twitch Settings"), button -> {
             button.setFocused(false);
             setFocused(null);
 
-            minecraft.gui.setScreen(new StreamChatSettingsScreen(this));
-        }).bounds(bottomLeft, 260, bottomWidth, 20).build());
+            minecraft.gui.setScreen(new TwitchSettingsScreen(this));
+        }).bounds(twitchLeft, 245, columnWidth, 20).build());
+
+        addRenderableWidget(Button.builder(Component.literal("Kick Settings"), button -> {
+            button.setFocused(false);
+            setFocused(null);
+
+            minecraft.gui.setScreen(new KickSettingsScreen(this));
+        }).bounds(kickLeft, 245, columnWidth, 20).build());
+
+
 
         addRenderableWidget(Button.builder(Component.literal("Close"), button -> {
             button.setFocused(false);
@@ -142,7 +151,7 @@ public final class StreamChatConfigScreen extends Screen {
                 button.setFocused(false);
                 setFocused(null);
 
-                minecraft.gui.setScreen(new StreamChatSettingsScreen(this));
+                minecraft.gui.setScreen(new KickSettingsScreen(this));
             }).bounds(left, 155, width, 20).build());
 
             return;

@@ -1,6 +1,7 @@
 package com.kryp.streamchatbridge.minecraft;
 
 import com.kryp.streamchatbridge.config.ConfigManager;
+import com.kryp.streamchatbridge.config.ModConfig;
 import com.kryp.streamchatbridge.kick.KickClient;
 import com.kryp.streamchatbridge.twitch.TwitchClient;
 import net.fabricmc.fabric.api.client.message.v1.ClientSendMessageEvents;
@@ -11,93 +12,169 @@ import net.minecraft.network.chat.MutableComponent;
 
 public final class MinecraftChatBridge {
 
-    public static final String DEFAULT_FORMAT = "<dark_purple>[{platform}]<reset> <green>{username}<reset>: <white>{message}";
+    public static final String TWITCH_DEFAULT_FORMAT = "<dark_purple>[{platform}]<reset> <green>{username}<reset>: <white>{message}";
+
+    public static final String KICK_DEFAULT_FORMAT = "<green>[{platform}]<reset> <green>{username}<reset>: <white>{message}";
+
+    /*
+     * Keep this alias for existing UI code until we replace the old
+     * combined settings screen.
+     */
+    public static final String DEFAULT_FORMAT = TWITCH_DEFAULT_FORMAT;
 
     private MinecraftChatBridge() {
     }
 
+    /*
+     * Outgoing Minecraft chat
+     */
+
     public static void registerOutgoing(TwitchClient twitchClient, KickClient kickClient) {
         ClientSendMessageEvents.ALLOW_CHAT.register(message -> {
-            boolean twitchEnabled = ConfigManager.get().twitchSendEnabled;
+            ModConfig config = ConfigManager.get();
 
-            boolean kickEnabled = ConfigManager.get().kickSendEnabled;
+            /*
+             * Twitch
+             */
 
-            if (!twitchEnabled && !kickEnabled) {
-                return true;
+            if (config.twitchSendEnabled) {
+                String prefix = normalizePrefix(config.twitchOutgoingPrefix);
+
+                if (matchesPrefix(message, prefix)) {
+                    String outgoingMessage = stripPrefix(message, prefix);
+
+                    if (!outgoingMessage.isEmpty()) {
+                        Thread.startVirtualThread(() -> sendTwitchMessage(twitchClient, outgoingMessage));
+                    }
+
+                    return false;
+                }
             }
 
-            String prefix = ConfigManager.get().outgoingPrefix;
+            /*
+             * Kick
+             */
 
-            if (prefix == null || prefix.isEmpty()) {
-                return true;
+            if (config.kickSendEnabled) {
+                String prefix = normalizePrefix(config.kickOutgoingPrefix);
+
+                if (matchesPrefix(message, prefix)) {
+                    String outgoingMessage = stripPrefix(message, prefix);
+
+                    if (!outgoingMessage.isEmpty()) {
+                        Thread.startVirtualThread(() -> sendKickMessage(kickClient, outgoingMessage));
+                    }
+
+                    return false;
+                }
             }
 
-            if (!message.startsWith(prefix)) {
-                return true;
-            }
+            /*
+             * No bridge prefix matched.
+             * Send the message to Minecraft normally.
+             */
 
-            String outgoingMessage = message.substring(prefix.length()).trim();
-
-            if (outgoingMessage.isEmpty()) {
-                return false;
-            }
-
-            Thread.startVirtualThread(() -> sendOutgoingMessage(twitchClient, kickClient, outgoingMessage, twitchEnabled, kickEnabled));
-
-            return false;
+            return true;
         });
     }
 
-    private static void sendOutgoingMessage(TwitchClient twitchClient, KickClient kickClient, String message, boolean twitchEnabled, boolean kickEnabled) {
-        if (twitchEnabled) {
-            boolean sent = twitchClient.sendMessage(message);
+    private static void sendTwitchMessage(TwitchClient twitchClient, String message) {
+        boolean sent = twitchClient.sendMessage(message);
 
-            if (!sent) {
-                showLocalMessage(systemMessage().append(twitch()).append(separator(": ")).append(error("Failed to send message")));
-            }
-        }
-
-        if (kickEnabled) {
-            boolean sent = kickClient.sendMessage(message);
-
-            if (!sent) {
-                showLocalMessage(systemMessage().append(kick()).append(separator(": ")).append(error("Failed to send message")));
-            }
+        if (!sent) {
+            showLocalMessage(systemMessage().append(twitch()).append(separator(": ")).append(error("Failed to send message")));
         }
     }
 
-    public static void showTwitchMessage(String username, String message) {
-        String format = ConfigManager.get().incomingMessageFormat;
+    private static void sendKickMessage(KickClient kickClient, String message) {
+        boolean sent = kickClient.sendMessage(message);
 
-        if (format == null || format.isBlank()) {
-            format = DEFAULT_FORMAT;
+        if (!sent) {
+            showLocalMessage(systemMessage().append(kick()).append(separator(": ")).append(error("Failed to send message")));
+        }
+    }
+
+    private static String normalizePrefix(String prefix) {
+        if (prefix == null) {
+            return "";
         }
 
-        String platform = ConfigManager.get().incomingPlatformLabel;
+        return prefix;
+    }
+
+    private static boolean matchesPrefix(String message, String prefix) {
+        if (message == null || prefix == null || prefix.isEmpty()) {
+
+            return false;
+        }
+
+        return message.startsWith(prefix);
+    }
+
+    private static String stripPrefix(String message, String prefix) {
+        return message.substring(prefix.length()).trim();
+    }
+
+    /*
+     * Incoming Twitch
+     */
+
+    public static void showTwitchMessage(String username, String message) {
+        ModConfig config = ConfigManager.get();
+
+        String format = config.twitchIncomingMessageFormat;
+
+        if (format == null || format.isBlank()) {
+
+            format = TWITCH_DEFAULT_FORMAT;
+        }
+
+        String platform = config.twitchIncomingPlatformLabel;
 
         if (platform == null || platform.isBlank()) {
+
             platform = "Twitch";
         }
 
         showLocalMessage(buildIncomingComponent(format, platform, username, message));
     }
 
+    /*
+     * Incoming Kick
+     */
+
     public static void showKickMessage(String username, String message) {
-        String format = ConfigManager.get().incomingMessageFormat;
+        ModConfig config = ConfigManager.get();
+
+        String format = config.kickIncomingMessageFormat;
 
         if (format == null || format.isBlank()) {
-            format = DEFAULT_FORMAT;
+
+            format = KICK_DEFAULT_FORMAT;
         }
 
-        showLocalMessage(buildIncomingComponent(format, "Kick", username, message));
+        String platform = config.kickIncomingPlatformLabel;
+
+        if (platform == null || platform.isBlank()) {
+
+            platform = "Kick";
+        }
+
+        showLocalMessage(buildIncomingComponent(format, platform, username, message));
     }
+
+    /*
+     * Incoming message formatter
+     */
 
     public static MutableComponent buildIncomingComponent(String format, String platform, String username, String message) {
         if (format == null || format.isBlank()) {
+
             format = DEFAULT_FORMAT;
         }
 
         if (platform == null || platform.isBlank()) {
+
             platform = "Twitch";
         }
 
@@ -128,6 +205,7 @@ public final class MinecraftChatBridge {
                     boolean reset = tag.equalsIgnoreCase("reset");
 
                     if (parsedColor != null || reset) {
+
                         appendFormattedText(result, format.substring(textStart, position), currentColor, platform, username, message);
 
                         currentColor = reset ? null : parsedColor;
@@ -218,6 +296,7 @@ public final class MinecraftChatBridge {
 
     private static ChatFormatting parseColorTag(String tag) {
         if (tag == null || tag.isBlank()) {
+
             return null;
         }
 
@@ -259,7 +338,7 @@ public final class MinecraftChatBridge {
     }
 
     /*
-     * Stream Chat Bridge system message components.
+     * Stream Chat Bridge system message components
      */
 
     public static MutableComponent systemMessage() {

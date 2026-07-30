@@ -45,6 +45,7 @@ public class StreamChatBridgeClient implements ClientModInitializer {
                 Thread.sleep(1_000L);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+
                 return;
             }
 
@@ -55,94 +56,42 @@ public class StreamChatBridgeClient implements ClientModInitializer {
             System.out.println("[Stream Chat Bridge] Shutting down...");
 
             TWITCH_EVENT_SUB.shutdown();
+
             KICK_CHAT.disconnect();
         });
 
         System.out.println("[Stream Chat Bridge] Loaded");
 
+        /*
+         * Restore Twitch
+         */
+
         Thread.startVirtualThread(() -> {
             if (TWITCH_AUTH.restoreSession()) {
                 onTwitchAuthenticated();
+
             } else {
                 System.out.println("[Stream Chat Bridge] No valid Twitch session found.");
             }
         });
 
+        /*
+         * Restore Kick
+         */
+
         Thread.startVirtualThread(() -> {
             if (KICK_AUTH.restoreSession()) {
                 onKickAuthenticated();
+
             } else {
                 System.out.println("[Stream Chat Bridge] No valid Kick session found.");
             }
         });
     }
 
-    private static void onKickAuthenticated() {
-        System.out.println("[Stream Chat Bridge] Kick authenticated as: " + KICK_AUTH.getUsername());
-
-        String username = KICK_AUTH.getUsername();
-
-        if (username == null || username.isBlank()) {
-            System.err.println("[Stream Chat Bridge] Cannot start Kick chat: username is missing.");
-
-            return;
-        }
-
-        if (!KICK_CLIENT.loadOwnChannel()) {
-            System.err.println("[Stream Chat Bridge] Could not load Kick channel.");
-        }
-
-        if (!KICK_CHAT.connect(username)) {
-            System.err.println("[Stream Chat Bridge] Could not connect to Kick chat.");
-        }
-    }
-
-    private static void showJoinStatus() {
-        if (!TWITCH_AUTH.isAuthenticated()) {
-            MinecraftChatBridge.showLocalMessage(MinecraftChatBridge.systemMessage().append(MinecraftChatBridge.twitch()).append(MinecraftChatBridge.separator(": ")).append(MinecraftChatBridge.error("Not logged in")));
-
-            return;
-        }
-
-        TwitchEventSubClient.ConnectionState state = TWITCH_EVENT_SUB.getConnectionState();
-
-        MutableComponent message = MinecraftChatBridge.systemMessage().append(MinecraftChatBridge.twitch()).append(MinecraftChatBridge.separator(": "));
-
-        switch (state) {
-            case CONNECTED -> {
-                message.append(MinecraftChatBridge.success("Connected"));
-
-                String channel = getDisplayChannel();
-
-                if (channel != null) {
-                    message.append(MinecraftChatBridge.separator(" → "));
-
-                    message.append(MinecraftChatBridge.value(channel));
-                }
-            }
-
-            case CONNECTING -> message.append(MinecraftChatBridge.warning("Connecting..."));
-
-            case DISCONNECTED -> message.append(MinecraftChatBridge.error("Disconnected"));
-        }
-
-        MinecraftChatBridge.showLocalMessage(message);
-    }
-
-    private static String getDisplayChannel() {
-        String configuredChannel = ConfigManager.get().twitchChannel;
-
-        if (configuredChannel != null && !configuredChannel.isBlank()) {
-
-            return configuredChannel;
-        }
-
-        if (TWITCH_AUTH.isAuthenticated()) {
-            return TWITCH_AUTH.getUsername();
-        }
-
-        return null;
-    }
+    /*
+     * Twitch startup
+     */
 
     private static void onTwitchAuthenticated() {
         System.out.println("[Stream Chat Bridge] Twitch authenticated as: " + TWITCH_AUTH.getUsername());
@@ -159,6 +108,152 @@ public class StreamChatBridgeClient implements ClientModInitializer {
 
         TWITCH_EVENT_SUB.connect();
     }
+
+    /*
+     * Kick startup
+     */
+
+    private static void onKickAuthenticated() {
+        System.out.println("[Stream Chat Bridge] Kick authenticated as: " + KICK_AUTH.getUsername());
+
+        String username = KICK_AUTH.getUsername();
+
+        if (username == null || username.isBlank()) {
+
+            System.err.println("[Stream Chat Bridge] Cannot start Kick chat: username is missing.");
+
+            return;
+        }
+
+        if (!KICK_CLIENT.loadOwnChannel()) {
+            System.err.println("[Stream Chat Bridge] Could not load Kick channel.");
+        }
+
+        if (!KICK_CHAT.connect(username)) {
+            System.err.println("[Stream Chat Bridge] Could not connect to Kick chat.");
+        }
+    }
+
+    /*
+     * World join status
+     */
+
+    private static void showJoinStatus() {
+        showTwitchJoinStatus();
+        showKickJoinStatus();
+    }
+
+    private static void showTwitchJoinStatus() {
+        MutableComponent message = MinecraftChatBridge.systemMessage().append(MinecraftChatBridge.twitch()).append(MinecraftChatBridge.separator(": "));
+
+        if (!TWITCH_AUTH.isAuthenticated()) {
+            message.append(MinecraftChatBridge.error("Not logged in"));
+
+            MinecraftChatBridge.showLocalMessage(message);
+
+            return;
+        }
+
+        TwitchEventSubClient.ConnectionState state = TWITCH_EVENT_SUB.getConnectionState();
+
+        switch (state) {
+            case CONNECTED -> {
+                message.append(MinecraftChatBridge.success("Connected"));
+
+                String channel = getTwitchDisplayChannel();
+
+                if (channel != null) {
+                    message.append(MinecraftChatBridge.separator(" → "));
+
+                    message.append(MinecraftChatBridge.value(channel));
+                }
+            }
+
+            case CONNECTING -> message.append(MinecraftChatBridge.warning("Connecting..."));
+
+            case DISCONNECTED -> message.append(MinecraftChatBridge.error("Disconnected"));
+        }
+
+        MinecraftChatBridge.showLocalMessage(message);
+    }
+
+    private static void showKickJoinStatus() {
+        MutableComponent message = MinecraftChatBridge.systemMessage().append(MinecraftChatBridge.kick()).append(MinecraftChatBridge.separator(": "));
+
+        if (!KICK_AUTH.hasClientCredentials()) {
+            message.append(MinecraftChatBridge.error("Not configured"));
+
+            MinecraftChatBridge.showLocalMessage(message);
+
+            return;
+        }
+
+        if (!KICK_AUTH.isAuthenticated()) {
+            message.append(MinecraftChatBridge.error("Not logged in"));
+
+            MinecraftChatBridge.showLocalMessage(message);
+
+            return;
+        }
+
+        KickChatClient.ConnectionState state = KICK_CHAT.getConnectionState();
+
+        switch (state) {
+            case CONNECTED -> {
+                message.append(MinecraftChatBridge.success("Connected"));
+
+                String channel = getKickDisplayChannel();
+
+                if (channel != null) {
+                    message.append(MinecraftChatBridge.separator(" → "));
+
+                    message.append(MinecraftChatBridge.value(channel));
+                }
+            }
+
+            case CONNECTING -> message.append(MinecraftChatBridge.warning("Connecting..."));
+
+            case DISCONNECTED -> message.append(MinecraftChatBridge.error("Disconnected"));
+        }
+
+        MinecraftChatBridge.showLocalMessage(message);
+    }
+
+    private static String getTwitchDisplayChannel() {
+        String configuredChannel = ConfigManager.get().twitchChannel;
+
+        if (configuredChannel != null && !configuredChannel.isBlank()) {
+
+            return configuredChannel;
+        }
+
+        if (TWITCH_AUTH.isAuthenticated()) {
+            return TWITCH_AUTH.getUsername();
+        }
+
+        return null;
+    }
+
+    private static String getKickDisplayChannel() {
+        if (KICK_CLIENT.hasChannel()) {
+            String channel = KICK_CLIENT.getChannelSlug();
+
+            if (channel != null && !channel.isBlank()) {
+
+                return channel;
+            }
+        }
+
+        if (KICK_AUTH.isAuthenticated()) {
+            return KICK_AUTH.getUsername();
+        }
+
+        return null;
+    }
+
+    /*
+     * Public platform access
+     */
 
     public static TwitchAuth getTwitchAuth() {
         return TWITCH_AUTH;
