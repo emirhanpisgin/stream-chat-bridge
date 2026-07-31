@@ -23,6 +23,8 @@ public class ModConfig {
 
     public boolean kickSendEnabled = true;
 
+    public String kickChannel = "";
+
     public String kickOutgoingPrefix = "!k ";
 
     public String kickIncomingPlatformLabel = "Kick";

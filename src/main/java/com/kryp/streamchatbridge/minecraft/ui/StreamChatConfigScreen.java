@@ -147,7 +147,7 @@ public final class StreamChatConfigScreen extends Screen {
         KickChatClient chat = StreamChatBridgeClient.getKickChat();
 
         if (!auth.hasClientCredentials()) {
-            addRenderableWidget(Button.builder(Component.literal("Configure Kick First"), button -> {
+            addRenderableWidget(Button.builder(Component.literal("Set Up Kick"), button -> {
                 button.setFocused(false);
                 setFocused(null);
 
@@ -158,7 +158,7 @@ public final class StreamChatConfigScreen extends Screen {
         }
 
         if (!auth.isAuthenticated()) {
-            Button loginButton = Button.builder(Component.literal(kickAuthenticationInProgress ? "Waiting for Kick..." : "Log in with Kick"), button -> {
+            Button loginButton = Button.builder(Component.literal(kickAuthenticationInProgress ? "Waiting for Kick..." : "Connect Account"), button -> {
                 button.setFocused(false);
                 setFocused(null);
 
@@ -579,14 +579,18 @@ public final class StreamChatConfigScreen extends Screen {
      * Kick display
      */
 
+    private String kickAppText() {
+        return StreamChatBridgeClient.getKickAuth().hasClientCredentials()
+                ? "Configured"
+                : "Setup required";
+    }
+
     private String kickAccountText() {
         KickAuth auth = StreamChatBridgeClient.getKickAuth();
 
-        if (!auth.hasClientCredentials()) {
-            return "Not configured";
-        }
-
-        return auth.isAuthenticated() ? auth.getUsername() : "Not logged in";
+        return auth.isAuthenticated()
+                ? auth.getUsername()
+                : "Not logged in";
     }
 
     private String kickChannelText() {
@@ -685,17 +689,21 @@ public final class StreamChatConfigScreen extends Screen {
 
         graphics.text(font, "KICK", kickLeft, 65, 0xFF53FC18, false);
 
-        graphics.text(font, "Account", kickLeft, 85, 0xFF888888, false);
+        graphics.text(font, "App", kickLeft, 85, 0xFF888888, false);
 
-        graphics.text(font, kickAccountText(), kickLeft + 65, 85, 0xFFFFFFFF, false);
+        graphics.text(font, kickAppText(), kickLeft + 65, 85, 0xFFFFFFFF, false);
 
-        graphics.text(font, "Channel", kickLeft, 102, 0xFF888888, false);
+        graphics.text(font, "Account", kickLeft, 102, 0xFF888888, false);
 
-        graphics.text(font, kickChannelText(), kickLeft + 65, 102, 0xFFFFFFFF, false);
+        graphics.text(font, kickAccountText(), kickLeft + 65, 102, 0xFFFFFFFF, false);
 
-        graphics.text(font, "Status", kickLeft, 119, 0xFF888888, false);
+        graphics.text(font, "Channel", kickLeft, 119, 0xFF888888, false);
 
-        graphics.text(font, kickConnectionText(), kickLeft + 65, 119, 0xFFFFFFFF, false);
+        graphics.text(font, kickChannelText(), kickLeft + 65, 119, 0xFFFFFFFF, false);
+
+        graphics.text(font, "Status", kickLeft, 136, 0xFF888888, false);
+
+        graphics.text(font, kickConnectionText(), kickLeft + 65, 136, 0xFFFFFFFF, false);
 
         if (!statusMessage.isBlank()) {
             graphics.text(font, statusMessage, width / 2 - font.width(statusMessage) / 2, 325, 0xFFAAAAAA, false);

@@ -5,7 +5,9 @@ import com.kryp.streamchatbridge.config.ConfigManager;
 import com.kryp.streamchatbridge.config.ModConfig;
 import com.kryp.streamchatbridge.kick.KickAuth;
 import com.kryp.streamchatbridge.minecraft.MinecraftChatBridge;
+import com.kryp.streamchatbridge.util.BrowserUtils;
 import net.minecraft.ChatFormatting;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
@@ -14,6 +16,8 @@ import net.minecraft.network.chat.Component;
 
 public final class KickSettingsScreen extends Screen {
 
+    private static final String DEVELOPER_URL = "https://dev.kick.com/";
+
     private static final ColorOption[] COLORS = {new ColorOption("Reset", "<reset>", null), new ColorOption("White", "<white>", ChatFormatting.WHITE), new ColorOption("Gray", "<gray>", ChatFormatting.GRAY), new ColorOption("Dark Gray", "<dark_gray>", ChatFormatting.DARK_GRAY), new ColorOption("Black", "<black>", ChatFormatting.BLACK), new ColorOption("Red", "<red>", ChatFormatting.RED), new ColorOption("Dark Red", "<dark_red>", ChatFormatting.DARK_RED), new ColorOption("Gold", "<gold>", ChatFormatting.GOLD), new ColorOption("Yellow", "<yellow>", ChatFormatting.YELLOW), new ColorOption("Green", "<green>", ChatFormatting.GREEN), new ColorOption("Dark Green", "<dark_green>", ChatFormatting.DARK_GREEN), new ColorOption("Aqua", "<aqua>", ChatFormatting.AQUA), new ColorOption("Dark Aqua", "<dark_aqua>", ChatFormatting.DARK_AQUA), new ColorOption("Blue", "<blue>", ChatFormatting.BLUE), new ColorOption("Dark Blue", "<dark_blue>", ChatFormatting.DARK_BLUE), new ColorOption("Light Purple", "<light_purple>", ChatFormatting.LIGHT_PURPLE), new ColorOption("Dark Purple", "<dark_purple>", ChatFormatting.DARK_PURPLE)};
 
     private final Screen parent;
@@ -21,6 +25,7 @@ public final class KickSettingsScreen extends Screen {
     private EditBox clientIdField;
     private EditBox clientSecretField;
 
+    private EditBox channelField;
     private EditBox prefixField;
     private EditBox platformField;
     private EditBox formatField;
@@ -28,6 +33,8 @@ public final class KickSettingsScreen extends Screen {
     private int selectedColorIndex = 9;
 
     private String statusMessage = "";
+
+    private boolean setupMode;
 
     public KickSettingsScreen(Screen parent) {
         super(Component.literal("Kick Settings"));
@@ -37,16 +44,43 @@ public final class KickSettingsScreen extends Screen {
 
     @Override
     protected void init() {
-        ModConfig config = ConfigManager.get();
+        clearWidgets();
 
+        KickAuth auth = StreamChatBridgeClient.getKickAuth();
+
+        setupMode = !auth.hasClientCredentials();
+
+        if (setupMode) {
+            initSetup();
+        } else {
+            initSettings();
+        }
+    }
+
+    /*
+     * Setup
+     */
+
+    private void initSetup() {
         KickAuth auth = StreamChatBridgeClient.getKickAuth();
 
         int contentWidth = 400;
         int left = width / 2 - contentWidth / 2;
 
-        int halfWidth = 195;
+        addRenderableWidget(Button.builder(Component.literal("Open Kick Developer Portal"), button -> {
+            BrowserUtils.open(DEVELOPER_URL);
+            release(button);
+        }).bounds(left, 105, contentWidth, 20).build());
 
-        clientIdField = new EditBox(font, left, 60, halfWidth, 20, Component.literal("Client ID"));
+        addRenderableWidget(Button.builder(Component.literal("Copy Redirect URL"), button -> {
+            Minecraft.getInstance().keyboardHandler.setClipboard(KickAuth.getRedirectUri());
+
+            statusMessage = "Redirect URL copied";
+
+            release(button);
+        }).bounds(left, 165, contentWidth, 20).build());
+
+        clientIdField = new EditBox(font, left, 225, contentWidth, 20, Component.literal("Client ID"));
 
         clientIdField.setValue(auth.getClientId() == null ? "" : auth.getClientId());
 
@@ -54,14 +88,46 @@ public final class KickSettingsScreen extends Screen {
 
         addRenderableWidget(clientIdField);
 
-        clientSecretField = new EditBox(font, left + 205, 60, halfWidth, 20, Component.literal("Client Secret"));
+        clientSecretField = new EditBox(font, left, 270, contentWidth, 20, Component.literal("Client Secret"));
 
         clientSecretField.setValue("");
         clientSecretField.setMaxLength(512);
 
+        clientSecretField.addFormatter((text, position) -> Component.literal("•".repeat(text.length())).getVisualOrderText());
+
         addRenderableWidget(clientSecretField);
 
-        prefixField = new EditBox(font, left, 120, contentWidth, 20, Component.literal("Outgoing Prefix"));
+        addRenderableWidget(Button.builder(Component.literal("Save & Continue"), button -> {
+            saveSetup();
+            release(button);
+        }).bounds(left, 310, 195, 20).build());
+
+        addRenderableWidget(Button.builder(Component.literal("Back"), button -> {
+            release(button);
+
+            minecraft.gui.setScreen(parent);
+        }).bounds(left + 205, 310, 195, 20).build());
+    }
+
+    /*
+     * Settings
+     */
+
+    private void initSettings() {
+        ModConfig config = ConfigManager.get();
+
+        int contentWidth = 400;
+        int left = width / 2 - contentWidth / 2;
+
+        channelField = new EditBox(font, left, 70, contentWidth, 20, Component.literal("Channel"));
+
+        channelField.setValue(config.kickChannel == null ? "" : config.kickChannel);
+
+        channelField.setMaxLength(100);
+
+        addRenderableWidget(channelField);
+
+        prefixField = new EditBox(font, left, 110, contentWidth, 20, Component.literal("Outgoing Prefix"));
 
         prefixField.setValue(config.kickOutgoingPrefix == null ? "!k " : config.kickOutgoingPrefix);
 
@@ -69,7 +135,7 @@ public final class KickSettingsScreen extends Screen {
 
         addRenderableWidget(prefixField);
 
-        platformField = new EditBox(font, left, 165, contentWidth, 20, Component.literal("Platform Label"));
+        platformField = new EditBox(font, left, 150, contentWidth, 20, Component.literal("Platform Label"));
 
         platformField.setValue(config.kickIncomingPlatformLabel == null ? "Kick" : config.kickIncomingPlatformLabel);
 
@@ -77,7 +143,7 @@ public final class KickSettingsScreen extends Screen {
 
         addRenderableWidget(platformField);
 
-        formatField = new EditBox(font, left, 210, contentWidth, 20, Component.literal("Incoming Format"));
+        formatField = new EditBox(font, left, 190, contentWidth, 20, Component.literal("Incoming Format"));
 
         String format = config.kickIncomingMessageFormat;
 
@@ -100,36 +166,216 @@ public final class KickSettingsScreen extends Screen {
             button.setMessage(selectedColorText());
 
             release(button);
-        }).bounds(left, 245, 260, 20).build());
+        }).bounds(left, 225, 260, 20).build());
 
         addRenderableWidget(Button.builder(Component.literal("Insert"), button -> {
             insertSelectedColor();
-
             release(button);
-        }).bounds(left + 270, 245, 130, 20).build());
+        }).bounds(left + 270, 225, 130, 20).build());
 
         addRenderableWidget(Button.builder(sendToggleText(), button -> {
             config.kickSendEnabled = !config.kickSendEnabled;
 
             button.setMessage(sendToggleText());
 
+            ConfigManager.save();
+
             release(button);
-        }).bounds(left, 300, contentWidth, 20).build());
+        }).bounds(left, 280, contentWidth, 20).build());
+
+        addRenderableWidget(Button.builder(Component.literal("App Credentials"), button -> {
+            openCredentialEditor();
+            release(button);
+        }).bounds(left, 315, contentWidth, 20).build());
 
         addRenderableWidget(Button.builder(Component.literal("Save"), button -> {
-            save();
-
+            saveSettings();
             release(button);
-        }).bounds(left, 335, 195, 20).build());
+        }).bounds(left, 350, 195, 20).build());
 
         addRenderableWidget(Button.builder(Component.literal("Back"), button -> {
-            save();
-
+            saveSettings();
             release(button);
 
             minecraft.gui.setScreen(parent);
-        }).bounds(left + 205, 335, 195, 20).build());
+        }).bounds(left + 205, 350, 195, 20).build());
     }
+
+    private void openCredentialEditor() {
+        setupMode = true;
+
+        rebuildWidgets();
+    }
+
+    /*
+     * Save setup
+     */
+
+    private void saveSetup() {
+        KickAuth auth = StreamChatBridgeClient.getKickAuth();
+
+        String clientId = clientIdField.getValue().trim();
+
+        String clientSecret = clientSecretField.getValue().trim();
+
+        if (clientId.isBlank()) {
+            statusMessage = "Client ID is required";
+
+            return;
+        }
+
+        if (clientSecret.isBlank()) {
+            statusMessage = "Client Secret is required";
+
+            return;
+        }
+
+        StreamChatBridgeClient.getKickChat().disconnect();
+
+        StreamChatBridgeClient.getKickClient().clearChannel();
+
+        auth.setClientCredentials(clientId, clientSecret);
+
+        statusMessage = "Kick app configured";
+
+        setupMode = false;
+
+        rebuildWidgets();
+    }
+
+    /*
+     * Save settings
+     */
+
+    private void saveSettings() {
+        if (channelField == null || prefixField == null || platformField == null || formatField == null) {
+
+            return;
+        }
+
+        ModConfig config = ConfigManager.get();
+
+        String oldChannel = config.kickChannel == null ? "" : config.kickChannel.trim();
+
+        String newChannel = normalizeChannel(channelField.getValue());
+
+        config.kickOutgoingPrefix = prefixField.getValue();
+
+        config.kickIncomingPlatformLabel = platformField.getValue().isBlank() ? "Kick" : platformField.getValue();
+
+        config.kickIncomingMessageFormat = formatField.getValue().isBlank() ? MinecraftChatBridge.KICK_DEFAULT_FORMAT : formatField.getValue();
+
+        /*
+         * If the channel didn't change, save everything normally.
+         */
+        if (oldChannel.equalsIgnoreCase(newChannel)) {
+            ConfigManager.save();
+
+            statusMessage = "Saved";
+
+            return;
+        }
+
+        /*
+         * If we're not authenticated, we can't validate the channel now.
+         * Save it and let startup resolve it after authentication.
+         */
+        KickAuth auth = StreamChatBridgeClient.getKickAuth();
+
+        if (!auth.isAuthenticated()) {
+            config.kickChannel = newChannel;
+
+            ConfigManager.save();
+
+            statusMessage = "Saved";
+
+            return;
+        }
+
+        /*
+         * Channel changed while authenticated.
+         * applyChannel() will persist it only after a successful switch.
+         */
+        applyChannel(newChannel);
+    }
+
+    private void applyChannel(String configuredChannel) {
+        KickAuth auth = StreamChatBridgeClient.getKickAuth();
+
+        if (!auth.isAuthenticated()) {
+            return;
+        }
+
+        boolean useOwnChannel = configuredChannel == null || configuredChannel.isBlank();
+
+        String channel = useOwnChannel ? auth.getUsername() : configuredChannel.trim();
+
+        if (channel == null || channel.isBlank()) {
+            statusMessage = "Kick username unavailable";
+
+            return;
+        }
+
+        statusMessage = "Changing channel...";
+
+        Thread.startVirtualThread(() -> {
+            var client = StreamChatBridgeClient.getKickClient();
+
+            var chat = StreamChatBridgeClient.getKickChat();
+
+            boolean channelLoaded;
+
+            if (useOwnChannel) {
+                channelLoaded = client.loadOwnChannel();
+            } else {
+                channelLoaded = client.setChannel(channel);
+            }
+
+            if (!channelLoaded) {
+                setStatus("Channel not found");
+                return;
+            }
+
+            if (!chat.connect(channel)) {
+                setStatus("Could not connect to channel");
+                return;
+            }
+
+            ModConfig config = ConfigManager.get();
+
+            config.kickChannel = useOwnChannel ? "" : configuredChannel.trim();
+
+            ConfigManager.save();
+
+            setStatus("Saved");
+        });
+    }
+
+    private String normalizeChannel(String channel) {
+        if (channel == null) {
+            return "";
+        }
+
+        String normalized = channel.trim();
+
+        if (normalized.startsWith("@")) {
+            normalized = normalized.substring(1);
+        }
+
+        return normalized.trim();
+    }
+
+    private void setStatus(String message) {
+        if (minecraft == null) {
+            return;
+        }
+
+        minecraft.execute(() -> statusMessage = message);
+    }
+
+    /*
+     * UI helpers
+     */
 
     private Component sendToggleText() {
         return Component.literal("Minecraft → Kick: " + (ConfigManager.get().kickSendEnabled ? "ON" : "OFF"));
@@ -164,61 +410,6 @@ public final class KickSettingsScreen extends Screen {
         setFocused(formatField);
     }
 
-    private void save() {
-        ModConfig config = ConfigManager.get();
-
-        KickAuth auth = StreamChatBridgeClient.getKickAuth();
-
-        String oldClientId = auth.getClientId() == null ? "" : auth.getClientId().trim();
-
-        String newClientId = clientIdField.getValue().trim();
-
-        String newClientSecret = clientSecretField.getValue().trim();
-
-        config.kickOutgoingPrefix = prefixField.getValue();
-
-        config.kickIncomingPlatformLabel = platformField.getValue().isBlank() ? "Kick" : platformField.getValue();
-
-        config.kickIncomingMessageFormat = formatField.getValue().isBlank() ? MinecraftChatBridge.KICK_DEFAULT_FORMAT : formatField.getValue();
-
-        ConfigManager.save();
-
-        statusMessage = "Saved";
-
-        /*
-         * Credentials are managed by KickAuth rather than ModConfig.
-         *
-         * We never display the stored secret.
-         * Leaving Client Secret blank keeps existing credentials.
-         */
-
-        if (!newClientSecret.isBlank()) {
-            if (newClientId.isBlank()) {
-                statusMessage = "Client ID is required";
-
-                return;
-            }
-
-            StreamChatBridgeClient.getKickChat().disconnect();
-
-            StreamChatBridgeClient.getKickClient().clearChannel();
-
-            auth.setClientCredentials(newClientId, newClientSecret);
-
-            clientSecretField.setValue("");
-
-            statusMessage = "Saved — credentials updated";
-
-            return;
-        }
-
-        if (!newClientId.equals(oldClientId)) {
-            clientIdField.setValue(oldClientId);
-
-            statusMessage = "Enter Client Secret to change credentials";
-        }
-    }
-
     private Component previewComponent() {
         String format = formatField == null ? MinecraftChatBridge.KICK_DEFAULT_FORMAT : formatField.getValue();
 
@@ -235,9 +426,15 @@ public final class KickSettingsScreen extends Screen {
         }
     }
 
+    /*
+     * Screen
+     */
+
     @Override
     public void onClose() {
-        save();
+        if (!setupMode) {
+            saveSettings();
+        }
 
         minecraft.gui.setScreen(parent);
     }
@@ -246,31 +443,66 @@ public final class KickSettingsScreen extends Screen {
     public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
         super.extractRenderState(graphics, mouseX, mouseY, delta);
 
+        if (setupMode) {
+            renderSetup(graphics);
+        } else {
+            renderSettings(graphics);
+        }
+    }
+
+    private void renderSetup(GuiGraphicsExtractor graphics) {
+        int contentWidth = 400;
+        int left = width / 2 - contentWidth / 2;
+
+        Component setupTitle = Component.literal("Kick Setup");
+
+        graphics.text(font, setupTitle, width / 2 - font.width(setupTitle) / 2, 20, 0xFF53FC18, true);
+
+        graphics.text(font, "Kick requires a developer app before Stream Chat Bridge can connect.", left, 45, 0xFFAAAAAA, false);
+
+        graphics.text(font, "1. Create a Kick developer app", left, 85, 0xFFFFFFFF, false);
+
+        graphics.text(font, "2. Add this Redirect URL to your app", left, 140, 0xFFFFFFFF, false);
+
+        graphics.text(font, KickAuth.getRedirectUri(), left, 152, 0xFFAAAAAA, false);
+
+        graphics.text(font, "3. Enter your app credentials", left, 205, 0xFFFFFFFF, false);
+
+        graphics.text(font, "Client ID", left, 214, 0xFFAAAAAA, false);
+
+        graphics.text(font, "Client Secret", left, 259, 0xFFAAAAAA, false);
+
+        if (!statusMessage.isBlank()) {
+            graphics.text(font, statusMessage, width / 2 - font.width(statusMessage) / 2, 345, 0xFFAAAAAA, false);
+        }
+    }
+
+    private void renderSettings(GuiGraphicsExtractor graphics) {
         int contentWidth = 400;
         int left = width / 2 - contentWidth / 2;
 
         graphics.text(font, title, width / 2 - font.width(title) / 2, 20, 0xFF53FC18, true);
 
-        graphics.text(font, "Kick App", left, 40, 0xFFAAAAAA, false);
+        graphics.text(font, "App", left, 42, 0xFFAAAAAA, false);
 
-        graphics.text(font, "Client ID", left, 49, 0xFFAAAAAA, false);
+        graphics.text(font, "Configured", left + 35, 42, 0xFF55FF55, false);
 
-        graphics.text(font, "Client Secret", left + 205, 49, 0xFFAAAAAA, false);
+        graphics.text(font, "Channel", left, 59, 0xFFAAAAAA, false);
 
-        graphics.text(font, StreamChatBridgeClient.getKickAuth().hasClientCredentials() ? "Leave Client Secret blank to keep the current credentials" : "Create a Kick app and enter its credentials", left, 88, 0xFF777777, false);
+        graphics.text(font, "Leave blank to use your own channel", left + 55, 59, 0xFF777777, false);
 
-        graphics.text(font, "Outgoing Prefix", left, 109, 0xFFAAAAAA, false);
+        graphics.text(font, "Outgoing Prefix", left, 99, 0xFFAAAAAA, false);
 
-        graphics.text(font, "Platform Label", left, 154, 0xFFAAAAAA, false);
+        graphics.text(font, "Platform Label", left, 139, 0xFFAAAAAA, false);
 
-        graphics.text(font, "Incoming Format", left, 199, 0xFFAAAAAA, false);
+        graphics.text(font, "Incoming Format", left, 179, 0xFFAAAAAA, false);
 
-        graphics.text(font, "Preview", left, 275, 0xFFAAAAAA, false);
+        graphics.text(font, "Preview", left, 255, 0xFFAAAAAA, false);
 
-        graphics.text(font, previewComponent(), left, 288, 0xFFFFFFFF, false);
+        graphics.text(font, previewComponent(), left, 268, 0xFFFFFFFF, false);
 
         if (!statusMessage.isBlank()) {
-            graphics.text(font, statusMessage, width / 2 - font.width(statusMessage) / 2, 370, 0xFFAAAAAA, false);
+            graphics.text(font, statusMessage, width / 2 - font.width(statusMessage) / 2, 385, 0xFFAAAAAA, false);
         }
     }
 

@@ -360,6 +360,10 @@ public final class KickAuth {
         return credentials.clientId;
     }
 
+    public static String getRedirectUri() {
+        return REDIRECT_URI;
+    }
+
     public String getAccessToken() {
         return getValidAccessToken();
     }

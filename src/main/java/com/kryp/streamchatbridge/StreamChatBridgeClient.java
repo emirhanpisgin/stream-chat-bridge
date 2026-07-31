@@ -119,18 +119,34 @@ public class StreamChatBridgeClient implements ClientModInitializer {
         String username = KICK_AUTH.getUsername();
 
         if (username == null || username.isBlank()) {
-
             System.err.println("[Stream Chat Bridge] Cannot start Kick chat: username is missing.");
 
             return;
         }
 
-        if (!KICK_CLIENT.loadOwnChannel()) {
-            System.err.println("[Stream Chat Bridge] Could not load Kick channel.");
+        String configuredChannel = ConfigManager.get().kickChannel;
+
+        String channel = configuredChannel == null || configuredChannel.isBlank() ? username : configuredChannel.trim();
+
+        boolean channelLoaded;
+
+        if (configuredChannel == null || configuredChannel.isBlank()) {
+
+            channelLoaded = KICK_CLIENT.loadOwnChannel();
+
+        } else {
+
+            channelLoaded = KICK_CLIENT.setChannel(channel);
         }
 
-        if (!KICK_CHAT.connect(username)) {
-            System.err.println("[Stream Chat Bridge] Could not connect to Kick chat.");
+        if (!channelLoaded) {
+            System.err.println("[Stream Chat Bridge] Could not load Kick channel: " + channel);
+
+            return;
+        }
+
+        if (!KICK_CHAT.connect(channel)) {
+            System.err.println("[Stream Chat Bridge] Could not connect to Kick chat: " + channel);
         }
     }
 
@@ -144,17 +160,15 @@ public class StreamChatBridgeClient implements ClientModInitializer {
     }
 
     private static void showTwitchJoinStatus() {
-        MutableComponent message = MinecraftChatBridge.systemMessage().append(MinecraftChatBridge.twitch()).append(MinecraftChatBridge.separator(": "));
-
         if (!TWITCH_AUTH.isAuthenticated()) {
-            message.append(MinecraftChatBridge.error("Not logged in"));
-
-            MinecraftChatBridge.showLocalMessage(message);
+            MinecraftChatBridge.showLocalMessage(MinecraftChatBridge.systemMessage().append(MinecraftChatBridge.twitch()).append(MinecraftChatBridge.separator(": ")).append(MinecraftChatBridge.warning("Not logged in")));
 
             return;
         }
 
         TwitchEventSubClient.ConnectionState state = TWITCH_EVENT_SUB.getConnectionState();
+
+        MutableComponent message = MinecraftChatBridge.systemMessage().append(MinecraftChatBridge.twitch()).append(MinecraftChatBridge.separator(": "));
 
         switch (state) {
             case CONNECTED -> {
@@ -178,25 +192,21 @@ public class StreamChatBridgeClient implements ClientModInitializer {
     }
 
     private static void showKickJoinStatus() {
-        MutableComponent message = MinecraftChatBridge.systemMessage().append(MinecraftChatBridge.kick()).append(MinecraftChatBridge.separator(": "));
-
         if (!KICK_AUTH.hasClientCredentials()) {
-            message.append(MinecraftChatBridge.error("Not configured"));
-
-            MinecraftChatBridge.showLocalMessage(message);
+            MinecraftChatBridge.showLocalMessage(MinecraftChatBridge.systemMessage().append(MinecraftChatBridge.kick()).append(MinecraftChatBridge.separator(": ")).append(MinecraftChatBridge.warning("Setup required")).append(MinecraftChatBridge.separator(" — ")).append(MinecraftChatBridge.label("Press F8 to configure")));
 
             return;
         }
 
         if (!KICK_AUTH.isAuthenticated()) {
-            message.append(MinecraftChatBridge.error("Not logged in"));
-
-            MinecraftChatBridge.showLocalMessage(message);
+            MinecraftChatBridge.showLocalMessage(MinecraftChatBridge.systemMessage().append(MinecraftChatBridge.kick()).append(MinecraftChatBridge.separator(": ")).append(MinecraftChatBridge.warning("Not logged in")));
 
             return;
         }
 
         KickChatClient.ConnectionState state = KICK_CHAT.getConnectionState();
+
+        MutableComponent message = MinecraftChatBridge.systemMessage().append(MinecraftChatBridge.kick()).append(MinecraftChatBridge.separator(": "));
 
         switch (state) {
             case CONNECTED -> {
@@ -235,13 +245,11 @@ public class StreamChatBridgeClient implements ClientModInitializer {
     }
 
     private static String getKickDisplayChannel() {
-        if (KICK_CLIENT.hasChannel()) {
-            String channel = KICK_CLIENT.getChannelSlug();
+        String configuredChannel = ConfigManager.get().kickChannel;
 
-            if (channel != null && !channel.isBlank()) {
+        if (configuredChannel != null && !configuredChannel.isBlank()) {
 
-                return channel;
-            }
+            return configuredChannel.trim();
         }
 
         if (KICK_AUTH.isAuthenticated()) {

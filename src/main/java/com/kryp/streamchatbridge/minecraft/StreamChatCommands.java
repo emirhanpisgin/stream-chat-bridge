@@ -2,12 +2,15 @@ package com.kryp.streamchatbridge.minecraft;
 
 import com.kryp.streamchatbridge.StreamChatBridgeClient;
 import com.kryp.streamchatbridge.config.ConfigManager;
+import com.kryp.streamchatbridge.config.ModConfig;
 import com.kryp.streamchatbridge.kick.KickAuth;
 import com.kryp.streamchatbridge.kick.KickChatClient;
 import com.kryp.streamchatbridge.kick.KickClient;
 import com.kryp.streamchatbridge.minecraft.ui.StreamChatConfigScreen;
 import com.kryp.streamchatbridge.twitch.TwitchAuth;
+import com.kryp.streamchatbridge.twitch.TwitchClient;
 import com.kryp.streamchatbridge.twitch.TwitchEventSubClient;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
 import net.minecraft.client.Minecraft;
@@ -19,7 +22,9 @@ public final class StreamChatCommands {
     }
 
     public static void register() {
-        ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> dispatcher.register(ClientCommands.literal("scb").executes(context -> {
+        ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> dispatcher.register(ClientCommands.literal("scb")
+
+                .executes(context -> {
                     openDashboard();
                     return 1;
                 })
@@ -32,7 +37,35 @@ public final class StreamChatCommands {
                 .then(ClientCommands.literal("status").executes(context -> {
                     showStatus();
                     return 1;
-                }))));
+                }))
+
+                .then(ClientCommands.literal("watch")
+
+                        .then(ClientCommands.literal("twitch")
+
+                                .executes(context -> {
+                                    showTwitchWatchStatus();
+                                    return 1;
+                                })
+
+                                .then(ClientCommands.argument("channel", StringArgumentType.word()).executes(context -> {
+                                    watchTwitch(StringArgumentType.getString(context, "channel"));
+
+                                    return 1;
+                                })))
+
+                        .then(ClientCommands.literal("kick")
+
+                                .executes(context -> {
+                                    showKickWatchStatus();
+                                    return 1;
+                                })
+
+                                .then(ClientCommands.argument("channel", StringArgumentType.word()).executes(context -> {
+                                    watchKick(StringArgumentType.getString(context, "channel"));
+
+                                    return 1;
+                                }))))));
     }
 
     private static void openDashboard() {
@@ -40,6 +73,197 @@ public final class StreamChatCommands {
 
         minecraft.execute(() -> minecraft.gui.setScreen(new StreamChatConfigScreen(null)));
     }
+
+    /*
+     * Watch
+     */
+
+    private static void watchTwitch(String requestedChannel) {
+        TwitchAuth auth = StreamChatBridgeClient.getTwitchAuth();
+
+        if (!auth.isAuthenticated()) {
+            showPlatformError(MinecraftChatBridge.twitch(), "Not logged in");
+
+            return;
+        }
+
+        boolean self = requestedChannel.equalsIgnoreCase("self");
+
+        String channel = self ? auth.getUsername() : normalizeChannel(requestedChannel);
+
+        if (channel == null || channel.isBlank()) {
+            showPlatformError(MinecraftChatBridge.twitch(), "Invalid channel");
+
+            return;
+        }
+
+        showPlatformInfo(MinecraftChatBridge.twitch(), "Switching to " + channel + "...");
+
+        Thread.startVirtualThread(() -> {
+            TwitchClient twitchClient = StreamChatBridgeClient.getTwitchClient();
+
+            /*
+             * setChannel() resolves the channel and also updates
+             * TwitchClient's active broadcaster.
+             *
+             * Unlike the old temporary watch design, this is now
+             * intentional because the selected channel is permanent.
+             */
+            if (!twitchClient.setChannel(self ? "" : channel)) {
+                showPlatformError(MinecraftChatBridge.twitch(), "Channel not found");
+
+                return;
+            }
+
+            TwitchEventSubClient eventSub = StreamChatBridgeClient.getTwitchEventSub();
+
+            eventSub.disconnect();
+
+            eventSub.setChannelId(twitchClient.getChannelId());
+
+            eventSub.connect();
+
+            ModConfig config = ConfigManager.get();
+
+            config.twitchChannel = self ? "" : channel;
+
+            ConfigManager.save();
+
+            showWatching(MinecraftChatBridge.twitch(), self ? auth.getUsername() : channel);
+        });
+    }
+
+    private static void watchKick(String requestedChannel) {
+        KickAuth auth = StreamChatBridgeClient.getKickAuth();
+
+        if (!auth.hasClientCredentials()) {
+            showPlatformError(MinecraftChatBridge.kick(), "Setup required — press F8 to configure");
+
+            return;
+        }
+
+        if (!auth.isAuthenticated()) {
+            showPlatformError(MinecraftChatBridge.kick(), "Not logged in");
+
+            return;
+        }
+
+        boolean self = requestedChannel.equalsIgnoreCase("self");
+
+        String channel = self ? auth.getUsername() : normalizeChannel(requestedChannel);
+
+        if (channel == null || channel.isBlank()) {
+            showPlatformError(MinecraftChatBridge.kick(), "Invalid channel");
+
+            return;
+        }
+
+        showPlatformInfo(MinecraftChatBridge.kick(), "Switching to " + channel + "...");
+
+        Thread.startVirtualThread(() -> {
+            KickClient client = StreamChatBridgeClient.getKickClient();
+
+            KickChatClient chat = StreamChatBridgeClient.getKickChat();
+
+            boolean channelLoaded;
+
+            if (self) {
+                channelLoaded = client.loadOwnChannel();
+            } else {
+                channelLoaded = client.setChannel(channel);
+            }
+
+            if (!channelLoaded) {
+                showPlatformError(MinecraftChatBridge.kick(), "Channel not found");
+
+                return;
+            }
+
+            if (!chat.connect(channel)) {
+                showPlatformError(MinecraftChatBridge.kick(), "Could not connect to channel");
+
+                return;
+            }
+
+            ModConfig config = ConfigManager.get();
+
+            config.kickChannel = self ? "" : channel;
+
+            ConfigManager.save();
+
+            showWatching(MinecraftChatBridge.kick(), channel);
+        });
+    }
+
+    private static void showTwitchWatchStatus() {
+        TwitchAuth auth = StreamChatBridgeClient.getTwitchAuth();
+
+        if (!auth.isAuthenticated()) {
+            showPlatformError(MinecraftChatBridge.twitch(), "Not logged in");
+
+            return;
+        }
+
+        String configured = ConfigManager.get().twitchChannel;
+
+        String channel = configured == null || configured.isBlank() ? auth.getUsername() : configured;
+
+        showWatching(MinecraftChatBridge.twitch(), channel);
+    }
+
+    private static void showKickWatchStatus() {
+        KickAuth auth = StreamChatBridgeClient.getKickAuth();
+
+        if (!auth.hasClientCredentials()) {
+            showPlatformError(MinecraftChatBridge.kick(), "Setup required — press F8 to configure");
+
+            return;
+        }
+
+        if (!auth.isAuthenticated()) {
+            showPlatformError(MinecraftChatBridge.kick(), "Not logged in");
+
+            return;
+        }
+
+        String configured = ConfigManager.get().kickChannel;
+
+        String channel = configured == null || configured.isBlank() ? auth.getUsername() : configured;
+
+        showWatching(MinecraftChatBridge.kick(), channel);
+    }
+
+    private static String normalizeChannel(String channel) {
+        if (channel == null) {
+            return null;
+        }
+
+        String normalized = channel.trim();
+
+        if (normalized.startsWith("@")) {
+            normalized = normalized.substring(1);
+        }
+
+        normalized = normalized.trim();
+
+        return normalized.isBlank() ? null : normalized;
+    }
+
+    private static void showWatching(MutableComponent platform, String channel) {
+        MinecraftChatBridge.showLocalMessage(MinecraftChatBridge.systemMessage().append(platform).append(MinecraftChatBridge.separator(": ")).append(MinecraftChatBridge.success("Watching ")).append(MinecraftChatBridge.value(channel)));
+    }
+
+    private static void showPlatformInfo(MutableComponent platform, String message) {
+        MinecraftChatBridge.showLocalMessage(MinecraftChatBridge.systemMessage().append(platform).append(MinecraftChatBridge.separator(": ")).append(MinecraftChatBridge.label(message)));
+    }
+
+    private static void showPlatformError(MutableComponent platform, String message) {
+        MinecraftChatBridge.showLocalMessage(MinecraftChatBridge.systemMessage().append(platform).append(MinecraftChatBridge.separator(": ")).append(MinecraftChatBridge.error(message)));
+    }
+
+    /*
+     * Status
+     */
 
     private static void showStatus() {
         MinecraftChatBridge.showLocalMessage(MinecraftChatBridge.systemMessage());
@@ -53,24 +277,15 @@ public final class StreamChatCommands {
 
         TwitchEventSubClient eventSub = StreamChatBridgeClient.getTwitchEventSub();
 
-        /*
-         * Header / account
-         */
-
         MutableComponent account = MinecraftChatBridge.twitch().append(MinecraftChatBridge.separator(" — "));
 
         if (auth.isAuthenticated()) {
             account.append(MinecraftChatBridge.value(auth.getUsername()));
-
         } else {
             account.append(MinecraftChatBridge.error("Not authenticated"));
         }
 
         MinecraftChatBridge.showLocalMessage(account);
-
-        /*
-         * Channel
-         */
 
         String configuredChannel = ConfigManager.get().twitchChannel;
 
@@ -81,23 +296,20 @@ public final class StreamChatCommands {
             channel = configuredChannel;
 
         } else if (auth.isAuthenticated()) {
+
             channel = auth.getUsername();
 
         } else {
+
             channel = "Own channel";
         }
 
         MinecraftChatBridge.showLocalMessage(MinecraftChatBridge.label("Channel: ").append(MinecraftChatBridge.value(channel)));
 
-        /*
-         * Connection
-         */
-
         MutableComponent status = MinecraftChatBridge.label("Status: ");
 
         if (!auth.isAuthenticated()) {
             status.append(MinecraftChatBridge.error("Not authenticated"));
-
         } else {
             switch (eventSub.getConnectionState()) {
                 case CONNECTED -> status.append(MinecraftChatBridge.success("Connected"));
@@ -110,15 +322,10 @@ public final class StreamChatCommands {
 
         MinecraftChatBridge.showLocalMessage(status);
 
-        /*
-         * Outgoing
-         */
-
         MutableComponent outgoing = MinecraftChatBridge.label("Minecraft → ").append(MinecraftChatBridge.twitch()).append(MinecraftChatBridge.separator(": "));
 
         if (ConfigManager.get().twitchSendEnabled) {
             outgoing.append(MinecraftChatBridge.success("ON"));
-
         } else {
             outgoing.append(MinecraftChatBridge.error("OFF"));
         }
@@ -129,58 +336,45 @@ public final class StreamChatCommands {
     private static void showKickStatus() {
         KickAuth auth = StreamChatBridgeClient.getKickAuth();
 
-        KickClient client = StreamChatBridgeClient.getKickClient();
-
         KickChatClient chat = StreamChatBridgeClient.getKickChat();
-
-        /*
-         * Header / account
-         */
 
         MutableComponent account = MinecraftChatBridge.kick().append(MinecraftChatBridge.separator(" — "));
 
         if (!auth.hasClientCredentials()) {
             account.append(MinecraftChatBridge.error("Not configured"));
-
         } else if (!auth.isAuthenticated()) {
             account.append(MinecraftChatBridge.error("Not authenticated"));
-
         } else {
             account.append(MinecraftChatBridge.value(auth.getUsername()));
         }
 
         MinecraftChatBridge.showLocalMessage(account);
 
-        /*
-         * Channel
-         */
+        String configuredChannel = ConfigManager.get().kickChannel;
 
         String channel;
 
-        if (client.hasChannel()) {
-            channel = client.getChannelSlug();
+        if (configuredChannel != null && !configuredChannel.isBlank()) {
+
+            channel = configuredChannel;
 
         } else if (auth.isAuthenticated()) {
+
             channel = auth.getUsername();
 
         } else {
+
             channel = "Own channel";
         }
 
         MinecraftChatBridge.showLocalMessage(MinecraftChatBridge.label("Channel: ").append(MinecraftChatBridge.value(channel)));
 
-        /*
-         * Connection
-         */
-
         MutableComponent status = MinecraftChatBridge.label("Status: ");
 
         if (!auth.hasClientCredentials()) {
             status.append(MinecraftChatBridge.error("Not configured"));
-
         } else if (!auth.isAuthenticated()) {
             status.append(MinecraftChatBridge.error("Not authenticated"));
-
         } else {
             switch (chat.getConnectionState()) {
                 case CONNECTED -> status.append(MinecraftChatBridge.success("Connected"));
@@ -193,15 +387,10 @@ public final class StreamChatCommands {
 
         MinecraftChatBridge.showLocalMessage(status);
 
-        /*
-         * Outgoing
-         */
-
         MutableComponent outgoing = MinecraftChatBridge.label("Minecraft → ").append(MinecraftChatBridge.kick()).append(MinecraftChatBridge.separator(": "));
 
         if (ConfigManager.get().kickSendEnabled) {
             outgoing.append(MinecraftChatBridge.success("ON"));
-
         } else {
             outgoing.append(MinecraftChatBridge.error("OFF"));
         }
