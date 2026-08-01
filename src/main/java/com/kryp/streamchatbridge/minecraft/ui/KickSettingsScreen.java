@@ -30,11 +30,17 @@ public final class KickSettingsScreen extends Screen {
     private EditBox platformField;
     private EditBox formatField;
 
+    private Button saveButton;
+
     private int selectedColorIndex = 9;
 
     private String statusMessage = "";
 
     private boolean setupMode;
+
+    private boolean editingCredentials = false;
+
+    private boolean channelChangeInProgress;
 
     public KickSettingsScreen(Screen parent) {
         super(Component.literal("Kick Settings"));
@@ -48,7 +54,9 @@ public final class KickSettingsScreen extends Screen {
 
         KickAuth auth = StreamChatBridgeClient.getKickAuth();
 
-        setupMode = !auth.hasClientCredentials();
+        if (!auth.hasClientCredentials()) {
+            setupMode = true;
+        }
 
         if (setupMode) {
             initSetup();
@@ -67,46 +75,104 @@ public final class KickSettingsScreen extends Screen {
         int contentWidth = 400;
         int left = width / 2 - contentWidth / 2;
 
-        addRenderableWidget(Button.builder(Component.literal("Open Kick Developer Portal"), button -> {
-            BrowserUtils.open(DEVELOPER_URL);
-            release(button);
-        }).bounds(left, 105, contentWidth, 20).build());
+        addRenderableWidget(Button.builder(
+                Component.literal("Open Kick Developer Portal"),
+                button -> {
+                    BrowserUtils.open(DEVELOPER_URL);
+                    release(button);
+                }
+        ).bounds(left, 82, contentWidth, 20).build());
 
-        addRenderableWidget(Button.builder(Component.literal("Copy Redirect URL"), button -> {
-            Minecraft.getInstance().keyboardHandler.setClipboard(KickAuth.getRedirectUri());
+        addRenderableWidget(Button.builder(
+                Component.literal("Copy Redirect URL"),
+                button -> {
+                    Minecraft.getInstance()
+                            .keyboardHandler
+                            .setClipboard(KickAuth.getRedirectUri());
 
-            statusMessage = "Redirect URL copied";
+                    statusMessage = "Redirect URL copied";
 
-            release(button);
-        }).bounds(left, 165, contentWidth, 20).build());
+                    release(button);
+                }
+        ).bounds(left, 137, contentWidth, 20).build());
 
-        clientIdField = new EditBox(font, left, 225, contentWidth, 20, Component.literal("Client ID"));
+        clientIdField = new EditBox(
+                font,
+                left,
+                279,
+                contentWidth,
+                20,
+                Component.literal("Client ID")
+        );
 
-        clientIdField.setValue(auth.getClientId() == null ? "" : auth.getClientId());
+        clientIdField.setValue(
+                auth.getClientId() == null
+                        ? ""
+                        : auth.getClientId()
+        );
 
         clientIdField.setMaxLength(256);
 
         addRenderableWidget(clientIdField);
 
-        clientSecretField = new EditBox(font, left, 270, contentWidth, 20, Component.literal("Client Secret"));
+        clientSecretField = new EditBox(
+                font,
+                left,
+                324,
+                contentWidth,
+                20,
+                Component.literal("Client Secret")
+        );
 
         clientSecretField.setValue("");
         clientSecretField.setMaxLength(512);
 
-        clientSecretField.addFormatter((text, position) -> Component.literal("•".repeat(text.length())).getVisualOrderText());
+        clientSecretField.addFormatter(
+                (text, position) ->
+                        Component.literal(
+                                "•".repeat(text.length())
+                        ).getVisualOrderText()
+        );
 
         addRenderableWidget(clientSecretField);
 
-        addRenderableWidget(Button.builder(Component.literal("Save & Continue"), button -> {
-            saveSetup();
-            release(button);
-        }).bounds(left, 310, 195, 20).build());
+        addRenderableWidget(Button.builder(
+                Component.literal(
+                        editingCredentials
+                                ? "Save Credentials"
+                                : "Save & Continue"
+                ),
+                button -> {
+                    saveSetup();
+                    release(button);
+                }
+        ).bounds(left, 360, 195, 20).build());
 
-        addRenderableWidget(Button.builder(Component.literal("Back"), button -> {
-            release(button);
+        addRenderableWidget(Button.builder(
+                Component.literal("Back"),
+                button -> {
+                    release(button);
 
-            minecraft.gui.setScreen(parent);
-        }).bounds(left + 205, 310, 195, 20).build());
+                    if (editingCredentials) {
+                        editingCredentials = false;
+                        setupMode = false;
+
+                        rebuildWidgets();
+                    } else {
+                        minecraft.gui.setScreen(parent);
+                    }
+                }
+        ).bounds(left + 205, 360, 195, 20).build());
+
+        if (editingCredentials) {
+            addRenderableWidget(Button.builder(
+                    Component.literal("Reset Kick App"),
+                    button -> {
+                        resetKickApp();
+                        release(button);
+                    }
+            ).bounds(left, 395, contentWidth, 20).build());
+        }
     }
 
     /*
@@ -188,10 +254,12 @@ public final class KickSettingsScreen extends Screen {
             release(button);
         }).bounds(left, 315, contentWidth, 20).build());
 
-        addRenderableWidget(Button.builder(Component.literal("Save"), button -> {
+        saveButton = addRenderableWidget(Button.builder(Component.literal("Save"), button -> {
             saveSettings();
             release(button);
         }).bounds(left, 350, 195, 20).build());
+
+        saveButton.active = !channelChangeInProgress;
 
         addRenderableWidget(Button.builder(Component.literal("Back"), button -> {
             saveSettings();
@@ -201,7 +269,28 @@ public final class KickSettingsScreen extends Screen {
         }).bounds(left + 205, 350, 195, 20).build());
     }
 
+    private void resetKickApp() {
+        KickAuth auth = StreamChatBridgeClient.getKickAuth();
+
+        StreamChatBridgeClient.getKickChat().disconnect();
+
+        StreamChatBridgeClient.getKickClient().clearChannel();
+
+        auth.resetClientCredentials();
+
+        clientIdField = null;
+        clientSecretField = null;
+
+        editingCredentials = false;
+        setupMode = true;
+
+        statusMessage = "Kick app credentials removed";
+
+        rebuildWidgets();
+    }
+
     private void openCredentialEditor() {
+        editingCredentials = true;
         setupMode = true;
 
         rebuildWidgets();
@@ -220,12 +309,27 @@ public final class KickSettingsScreen extends Screen {
 
         if (clientId.isBlank()) {
             statusMessage = "Client ID is required";
-
             return;
         }
 
+        boolean clientIdChanged = auth.getClientId() == null || !clientId.equals(auth.getClientId());
+
         if (clientSecret.isBlank()) {
-            statusMessage = "Client Secret is required";
+            if (!editingCredentials || clientIdChanged) {
+                statusMessage = "Client Secret is required";
+                return;
+            }
+
+            /*
+             * Existing credentials weren't changed.
+             * There is nothing to update.
+             */
+            statusMessage = "Credentials unchanged";
+
+            editingCredentials = false;
+            setupMode = false;
+
+            rebuildWidgets();
 
             return;
         }
@@ -238,6 +342,7 @@ public final class KickSettingsScreen extends Screen {
 
         statusMessage = "Kick app configured";
 
+        editingCredentials = false;
         setupMode = false;
 
         rebuildWidgets();
@@ -248,6 +353,10 @@ public final class KickSettingsScreen extends Screen {
      */
 
     private void saveSettings() {
+        if (channelChangeInProgress) {
+            return;
+        }
+
         if (channelField == null || prefixField == null || platformField == null || formatField == null) {
 
             return;
@@ -316,6 +425,12 @@ public final class KickSettingsScreen extends Screen {
             return;
         }
 
+        channelChangeInProgress = true;
+
+        if (saveButton != null) {
+            saveButton.active = false;
+        }
+
         statusMessage = "Changing channel...";
 
         Thread.startVirtualThread(() -> {
@@ -370,7 +485,14 @@ public final class KickSettingsScreen extends Screen {
             return;
         }
 
-        minecraft.execute(() -> statusMessage = message);
+        minecraft.execute(() -> {
+            statusMessage = message;
+            channelChangeInProgress = false;
+
+            if (saveButton != null) {
+                saveButton.active = true;
+            }
+        });
     }
 
     /*
@@ -454,27 +576,139 @@ public final class KickSettingsScreen extends Screen {
         int contentWidth = 400;
         int left = width / 2 - contentWidth / 2;
 
-        Component setupTitle = Component.literal("Kick Setup");
+        Component setupTitle =
+                Component.literal(
+                        editingCredentials
+                                ? "Kick App Credentials"
+                                : "Kick Setup"
+                );
 
-        graphics.text(font, setupTitle, width / 2 - font.width(setupTitle) / 2, 20, 0xFF53FC18, true);
+        graphics.text(
+                font,
+                setupTitle,
+                width / 2 - font.width(setupTitle) / 2,
+                15,
+                0xFF53FC18,
+                true
+        );
 
-        graphics.text(font, "Kick requires a developer app before Stream Chat Bridge can connect.", left, 45, 0xFFAAAAAA, false);
+        graphics.text(
+                font,
+                "Kick requires a developer app before Stream Chat Bridge can connect.",
+                left,
+                36,
+                0xFFAAAAAA,
+                false
+        );
 
-        graphics.text(font, "1. Create a Kick developer app", left, 85, 0xFFFFFFFF, false);
+        graphics.text(
+                font,
+                "1. Create a Kick developer app",
+                left,
+                62,
+                0xFFFFFFFF,
+                false
+        );
 
-        graphics.text(font, "2. Add this Redirect URL to your app", left, 140, 0xFFFFFFFF, false);
+        graphics.text(
+                font,
+                "2. Add this Redirect URL to your app",
+                left,
+                116,
+                0xFFFFFFFF,
+                false
+        );
 
-        graphics.text(font, KickAuth.getRedirectUri(), left, 152, 0xFFAAAAAA, false);
+        graphics.text(
+                font,
+                KickAuth.getRedirectUri(),
+                left,
+                128,
+                0xFFAAAAAA,
+                false
+        );
 
-        graphics.text(font, "3. Enter your app credentials", left, 205, 0xFFFFFFFF, false);
+        graphics.text(
+                font,
+                "3. In the app's Permissions / Scopes section, enable:",
+                left,
+                174,
+                0xFFFFFFFF,
+                false
+        );
 
-        graphics.text(font, "Client ID", left, 214, 0xFFAAAAAA, false);
+        String configuredScopes = KickAuth.getRequiredScopes();
 
-        graphics.text(font, "Client Secret", left, 259, 0xFFAAAAAA, false);
+        if (configuredScopes != null && !configuredScopes.isBlank()) {
+            String[] scopes = configuredScopes.trim().split("\\s+");
+
+            for (int index = 0; index < scopes.length; index++) {
+                String scope = scopes[index];
+                int y = 190 + index * 14;
+
+                graphics.text(font, scope, left + 10, y, 0xFFAAAAAA, false);
+                graphics.text(font, scopeDescription(scope), left + 125, y, 0xFF777777, false);
+            }
+        }
+
+        graphics.text(
+                font,
+                "4. Enter your app credentials",
+                left,
+                256,
+                0xFFFFFFFF,
+                false
+        );
+
+        graphics.text(
+                font,
+                "Client ID",
+                left,
+                272,
+                0xFFAAAAAA,
+                false
+        );
+
+        graphics.text(
+                font,
+                "Client Secret",
+                left,
+                317,
+                0xFFAAAAAA,
+                false
+        );
+
+        if (editingCredentials) {
+            graphics.text(
+                    font,
+                    "Leave Client Secret blank to keep the existing credentials.",
+                    left,
+                    350,
+                    0xFF777777,
+                    false
+            );
+        }
 
         if (!statusMessage.isBlank()) {
-            graphics.text(font, statusMessage, width / 2 - font.width(statusMessage) / 2, 345, 0xFFAAAAAA, false);
+            graphics.text(
+                    font,
+                    statusMessage,
+                    width / 2 - font.width(statusMessage) / 2,
+                    431,
+                    0xFFAAAAAA,
+                    false
+            );
         }
+    }
+
+    private static String scopeDescription(String scope) {
+        return switch (scope) {
+            case "user:read" -> "Read your Kick account details";
+            case "channel:read" -> "Look up channel information";
+            case "chat:write" -> "Send messages to Kick chat";
+            case "events:subscribe" -> "Receive live chat events";
+            default -> "Required by Stream Chat Bridge";
+        };
     }
 
     private void renderSettings(GuiGraphicsExtractor graphics) {

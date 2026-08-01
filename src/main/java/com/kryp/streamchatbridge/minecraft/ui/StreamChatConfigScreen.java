@@ -60,8 +60,6 @@ public final class StreamChatConfigScreen extends Screen {
             minecraft.gui.setScreen(new KickSettingsScreen(this));
         }).bounds(kickLeft, 245, columnWidth, 20).build());
 
-
-
         addRenderableWidget(Button.builder(Component.literal("Close"), button -> {
             button.setFocused(false);
             setFocused(null);
@@ -158,7 +156,7 @@ public final class StreamChatConfigScreen extends Screen {
         }
 
         if (!auth.isAuthenticated()) {
-            Button loginButton = Button.builder(Component.literal(kickAuthenticationInProgress ? "Waiting for Kick..." : "Connect Account"), button -> {
+            Button loginButton = Button.builder(Component.literal(kickAuthenticationInProgress ? "Waiting for Kick..." : "Log in with Kick"), button -> {
                 button.setFocused(false);
                 setFocused(null);
 
@@ -219,11 +217,11 @@ public final class StreamChatConfigScreen extends Screen {
         TwitchEventSubClient.ConnectionState state = StreamChatBridgeClient.getTwitchEventSub().getConnectionState();
 
         return Component.literal(switch (state) {
-            case CONNECTED -> "Reconnect Twitch";
+            case CONNECTED -> "Reconnect to Twitch";
 
             case CONNECTING -> "Connecting...";
 
-            case DISCONNECTED -> "Connect Twitch";
+            case DISCONNECTED -> "Connect to Twitch";
         });
     }
 
@@ -388,11 +386,11 @@ public final class StreamChatConfigScreen extends Screen {
         KickChatClient.ConnectionState state = StreamChatBridgeClient.getKickChat().getConnectionState();
 
         return Component.literal(switch (state) {
-            case CONNECTED -> "Reconnect Kick";
+            case CONNECTED -> "Reconnect to Kick";
 
             case CONNECTING -> "Connecting...";
 
-            case DISCONNECTED -> "Connect Kick";
+            case DISCONNECTED -> "Connect to Kick";
         });
     }
 
@@ -460,12 +458,31 @@ public final class StreamChatConfigScreen extends Screen {
         }
 
         if (chat.getConnectionState() == KickChatClient.ConnectionState.CONNECTING) {
+            return;
+        }
+
+        String configuredChannel = ConfigManager.get().kickChannel;
+
+        boolean useOwnChannel = configuredChannel == null || configuredChannel.isBlank();
+
+        String channel = useOwnChannel ? auth.getUsername() : configuredChannel.trim();
+
+        if (channel == null || channel.isBlank()) {
+            statusMessage = "No Kick channel selected";
+
+            rebuildWidgets();
 
             return;
         }
 
         Thread.startVirtualThread(() -> {
-            boolean channelLoaded = client.loadOwnChannel();
+            boolean channelLoaded;
+
+            if (useOwnChannel) {
+                channelLoaded = client.loadOwnChannel();
+            } else {
+                channelLoaded = client.setChannel(channel);
+            }
 
             if (!channelLoaded) {
                 if (minecraft != null) {
@@ -479,7 +496,7 @@ public final class StreamChatConfigScreen extends Screen {
                 return;
             }
 
-            boolean started = chat.connect(auth.getUsername());
+            boolean started = chat.connect(channel);
 
             if (!started && minecraft != null) {
                 minecraft.execute(() -> {
@@ -580,17 +597,13 @@ public final class StreamChatConfigScreen extends Screen {
      */
 
     private String kickAppText() {
-        return StreamChatBridgeClient.getKickAuth().hasClientCredentials()
-                ? "Configured"
-                : "Setup required";
+        return StreamChatBridgeClient.getKickAuth().hasClientCredentials() ? "Configured" : "Setup required";
     }
 
     private String kickAccountText() {
         KickAuth auth = StreamChatBridgeClient.getKickAuth();
 
-        return auth.isAuthenticated()
-                ? auth.getUsername()
-                : "Not logged in";
+        return auth.isAuthenticated() ? auth.getUsername() : "Not logged in";
     }
 
     private String kickChannelText() {
@@ -600,12 +613,9 @@ public final class StreamChatConfigScreen extends Screen {
             return "—";
         }
 
-        KickClient client = StreamChatBridgeClient.getKickClient();
-
-        String channel = client.getChannelSlug();
+        String channel = ConfigManager.get().kickChannel;
 
         if (channel != null && !channel.isBlank()) {
-
             return channel;
         }
 

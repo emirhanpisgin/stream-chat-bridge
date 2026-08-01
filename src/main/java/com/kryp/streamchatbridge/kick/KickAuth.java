@@ -325,6 +325,19 @@ public final class KickAuth {
         credentials.clearTokens();
     }
 
+    public void resetClientCredentials() {
+        userId = null;
+        username = null;
+
+        credentials.clientId = "";
+        credentials.clientSecret = "";
+        credentials.accessToken = "";
+        credentials.refreshToken = "";
+        credentials.expiresAt = 0L;
+
+        credentials.save();
+    }
+
     public void setClientCredentials(String clientId, String clientSecret) {
         String normalizedClientId = clientId == null ? "" : clientId.trim();
 
@@ -362,6 +375,10 @@ public final class KickAuth {
 
     public static String getRedirectUri() {
         return REDIRECT_URI;
+    }
+
+    public static String getRequiredScopes() {
+        return SCOPES;
     }
 
     public String getAccessToken() {

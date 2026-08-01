@@ -30,40 +30,91 @@ public final class KickChatClient {
 
     private static final String CHAT_EVENT = "App\\Events\\ChatMessageEvent";
 
+    private static final long[] RECONNECT_DELAYS_MS = {1_000L, 2_000L, 4_000L, 8_000L, 15_000L, 30_000L};
+
     private static final Gson GSON = new Gson();
 
     private final HttpClient httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
     private final BiConsumer<String, String> messageHandler;
 
-    private Pusher pusher;
-    private Channel channel;
+    private volatile Pusher pusher;
+
+    private volatile Channel channel;
 
     private volatile String chatroomId;
+
+    private volatile String username;
 
     private volatile ConnectionState connectionState = ConnectionState.DISCONNECTED;
 
     private volatile Consumer<ConnectionState> stateListener;
 
+    private volatile boolean shouldStayConnected = false;
+
+    private volatile boolean shuttingDown = false;
+
+    private volatile boolean reconnectScheduled = false;
+
+    private volatile int reconnectAttempt = 0;
+
+    private volatile long connectionGeneration = 0;
+
     public KickChatClient(BiConsumer<String, String> messageHandler) {
         this.messageHandler = messageHandler;
     }
 
+    /*
+     * Connection
+     */
+
     public synchronized boolean connect(String username) {
-        if (username == null || username.isBlank()) {
+        if (shuttingDown) {
+            return false;
+        }
+
+        String normalized = normalizeUsername(username);
+
+        if (normalized == null) {
             System.err.println("[Stream Chat Bridge] Cannot connect to Kick chat: username is missing.");
 
             return false;
         }
 
-        disconnect();
+        shouldStayConnected = true;
+
+        this.username = normalized;
+
+        reconnectScheduled = false;
+
+        resetReconnectBackoff();
+
+        connectionGeneration++;
+
+        cleanupConnection();
+
+        return connectInternal(normalized, connectionGeneration);
+    }
+
+    private boolean connectInternal(String username, long generation) {
+        if (shuttingDown || !shouldStayConnected || generation != connectionGeneration) {
+
+            return false;
+        }
 
         setConnectionState(ConnectionState.CONNECTING);
 
         String resolvedChatroomId = findChatroomId(username);
 
+        if (generation != connectionGeneration || shuttingDown || !shouldStayConnected) {
+
+            return false;
+        }
+
         if (resolvedChatroomId == null) {
             setConnectionState(ConnectionState.DISCONNECTED);
+
+            scheduleReconnect();
 
             return false;
         }
@@ -73,44 +124,38 @@ public final class KickChatClient {
         try {
             PusherOptions options = new PusherOptions().setCluster(PUSHER_CLUSTER);
 
-            pusher = new Pusher(PUSHER_KEY, options);
+            Pusher newPusher = new Pusher(PUSHER_KEY, options);
 
-            pusher.connect(new ConnectionEventListener() {
+            pusher = newPusher;
+
+            newPusher.connect(new ConnectionEventListener() {
 
                 @Override
                 public void onConnectionStateChange(ConnectionStateChange change) {
-                    System.out.println("[Stream Chat Bridge] Kick chat connection: " + change.getPreviousState() + " -> " + change.getCurrentState());
-
-                    switch (change.getCurrentState()) {
-                        case CONNECTED -> setConnectionState(ConnectionState.CONNECTED);
-
-                        case CONNECTING -> setConnectionState(ConnectionState.CONNECTING);
-
-                        case DISCONNECTED -> setConnectionState(ConnectionState.DISCONNECTED);
-
-                        default -> {
-                        }
-                    }
+                    handlePusherStateChange(newPusher, generation, change);
                 }
 
                 @Override
                 public void onError(String message, String code, Exception exception) {
-                    System.err.println("[Stream Chat Bridge] Kick Pusher error" + (code != null ? " [" + code + "]" : "") + ": " + message);
-
-                    if (exception != null) {
-                        exception.printStackTrace();
-                    }
+                    handlePusherError(newPusher, generation, message, code, exception);
                 }
             }, com.pusher.client.connection.ConnectionState.ALL);
 
             String channelName = "chatrooms." + chatroomId + ".v2";
 
-            channel = pusher.subscribe(channelName);
+            Channel newChannel = newPusher.subscribe(channelName);
 
-            channel.bind(CHAT_EVENT, new SubscriptionEventListener() {
+            channel = newChannel;
+
+            newChannel.bind(CHAT_EVENT, new SubscriptionEventListener() {
 
                 @Override
                 public void onEvent(com.pusher.client.channel.PusherEvent event) {
+                    if (generation != connectionGeneration) {
+
+                        return;
+                    }
+
                     handleChatEvent(event.getData());
                 }
             });
@@ -120,44 +165,230 @@ public final class KickChatClient {
             return true;
 
         } catch (Exception e) {
+            if (generation != connectionGeneration) {
+
+                return false;
+            }
+
             System.err.println("[Stream Chat Bridge] Could not connect to Kick chat: " + e.getMessage());
 
-            disconnect();
+            cleanupConnection();
+
+            setConnectionState(ConnectionState.DISCONNECTED);
+
+            scheduleReconnect();
 
             return false;
         }
     }
 
+    /*
+     * Pusher events
+     */
+
+    private synchronized void handlePusherStateChange(Pusher source, long generation, ConnectionStateChange change) {
+        if (generation != connectionGeneration || source != pusher) {
+
+            return;
+        }
+
+        System.out.println("[Stream Chat Bridge] Kick chat connection: " + change.getPreviousState() + " -> " + change.getCurrentState());
+
+        String state = change.getCurrentState().name();
+
+        switch (state) {
+            case "CONNECTED" -> {
+                reconnectScheduled = false;
+
+                resetReconnectBackoff();
+
+                setConnectionState(ConnectionState.CONNECTED);
+            }
+
+            case "CONNECTING", "RECONNECTING" -> setConnectionState(ConnectionState.CONNECTING);
+
+            case "DISCONNECTED" -> {
+                setConnectionState(ConnectionState.DISCONNECTED);
+
+                scheduleReconnect();
+            }
+
+            default -> {
+            }
+        }
+    }
+
+    private synchronized void handlePusherError(Pusher source, long generation, String message, String code, Exception exception) {
+        if (generation != connectionGeneration || source != pusher) {
+
+            return;
+        }
+
+        System.err.println("[Stream Chat Bridge] Kick Pusher error" + (code != null ? " [" + code + "]" : "") + ": " + message);
+
+        if (exception != null) {
+            System.err.println("[Stream Chat Bridge] Kick Pusher exception: " + exception.getMessage());
+        }
+
+        /*
+         * Pusher may recover from an error itself.
+         * We only start our own reconnect cycle once it actually
+         * transitions to DISCONNECTED.
+         */
+    }
+
+    /*
+     * Automatic reconnect
+     */
+
+    private synchronized void scheduleReconnect() {
+        if (shuttingDown || !shouldStayConnected || reconnectScheduled) {
+
+            return;
+        }
+
+        String targetUsername = username;
+
+        if (targetUsername == null || targetUsername.isBlank()) {
+
+            return;
+        }
+
+        long delay = RECONNECT_DELAYS_MS[Math.min(reconnectAttempt, RECONNECT_DELAYS_MS.length - 1)];
+
+        reconnectAttempt++;
+
+        reconnectScheduled = true;
+
+        System.out.println("[Stream Chat Bridge] Kick connection lost. Reconnecting in " + formatDelay(delay) + "...");
+
+        Thread.startVirtualThread(() -> {
+            try {
+                Thread.sleep(delay);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+
+                return;
+            }
+
+            synchronized (this) {
+                if (shuttingDown || !shouldStayConnected) {
+
+                    reconnectScheduled = false;
+
+                    return;
+                }
+
+                if (connectionState != ConnectionState.DISCONNECTED) {
+
+                    reconnectScheduled = false;
+
+                    return;
+                }
+
+                reconnectScheduled = false;
+
+                connectionGeneration++;
+
+                long generation = connectionGeneration;
+
+                cleanupConnection();
+
+                System.out.println("[Stream Chat Bridge] Reconnecting to Kick chat: " + targetUsername);
+
+                connectInternal(targetUsername, generation);
+            }
+        });
+    }
+
+    private synchronized void resetReconnectBackoff() {
+        reconnectAttempt = 0;
+    }
+
+    /*
+     * Manual disconnect
+     */
+
     public synchronized void disconnect() {
-        if (channel != null) {
-            try {
-                channel.unbind(CHAT_EVENT, null);
-            } catch (Exception ignored) {
-            }
+        shouldStayConnected = false;
 
-            channel = null;
-        }
+        reconnectScheduled = false;
 
-        if (pusher != null) {
-            try {
-                pusher.disconnect();
-            } catch (Exception ignored) {
-            }
+        resetReconnectBackoff();
 
-            pusher = null;
-        }
+        connectionGeneration++;
+
+        cleanupConnection();
 
         chatroomId = null;
+
+        username = null;
 
         setConnectionState(ConnectionState.DISCONNECTED);
     }
 
+    /*
+     * Shutdown
+     */
+
+    public synchronized void shutdown() {
+        shuttingDown = true;
+
+        shouldStayConnected = false;
+
+        reconnectScheduled = false;
+
+        resetReconnectBackoff();
+
+        connectionGeneration++;
+
+        cleanupConnection();
+
+        chatroomId = null;
+
+        username = null;
+
+        setConnectionState(ConnectionState.DISCONNECTED);
+    }
+
+    /*
+     * Cleanup
+     */
+
+    private void cleanupConnection() {
+        Channel oldChannel = channel;
+
+        channel = null;
+
+        if (oldChannel != null) {
+            try {
+                oldChannel.unbind(CHAT_EVENT, null);
+            } catch (Exception ignored) {
+            }
+        }
+
+        Pusher oldPusher = pusher;
+
+        pusher = null;
+
+        if (oldPusher != null) {
+            try {
+                oldPusher.disconnect();
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    /*
+     * Chatroom lookup
+     */
+
     private String findChatroomId(String username) {
         try {
-            String normalized = username.trim();
+            String normalized = normalizeUsername(username);
 
-            if (normalized.startsWith("@")) {
-                normalized = normalized.substring(1);
+            if (normalized == null) {
+                return null;
             }
 
             URI uri = URI.create("https://kick.com/api/v2/channels/" + normalized + "/chatroom");
@@ -199,8 +430,29 @@ public final class KickChatClient {
         }
     }
 
+    private static String normalizeUsername(String username) {
+        if (username == null) {
+            return null;
+        }
+
+        String normalized = username.trim();
+
+        if (normalized.startsWith("@")) {
+            normalized = normalized.substring(1);
+        }
+
+        normalized = normalized.trim();
+
+        return normalized.isBlank() ? null : normalized;
+    }
+
+    /*
+     * Incoming messages
+     */
+
     private void handleChatEvent(String raw) {
         if (raw == null || raw.isBlank()) {
+
             return;
         }
 
@@ -214,6 +466,7 @@ public final class KickChatClient {
             String message = readString(data, "content");
 
             if (message == null || message.isBlank()) {
+
                 return;
             }
 
@@ -227,10 +480,13 @@ public final class KickChatClient {
             String username = readString(sender, "username");
 
             if (username == null || username.isBlank()) {
+
                 return;
             }
 
-            messageHandler.accept(username, message);
+            if (messageHandler != null) {
+                messageHandler.accept(username, message);
+            }
 
         } catch (Exception e) {
             System.err.println("[Stream Chat Bridge] Could not process Kick chat message: " + e.getMessage());
@@ -245,6 +501,10 @@ public final class KickChatClient {
 
         return object.get(key).getAsString();
     }
+
+    /*
+     * State
+     */
 
     private void setConnectionState(ConnectionState state) {
         if (connectionState == state) {
@@ -274,5 +534,15 @@ public final class KickChatClient {
 
     public String getChatroomId() {
         return chatroomId;
+    }
+
+    public String getUsername() {
+        return username;
+    }
+
+    private static String formatDelay(long delayMs) {
+        long seconds = delayMs / 1_000L;
+
+        return seconds + (seconds == 1 ? " second" : " seconds");
     }
 }

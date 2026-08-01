@@ -3,15 +3,16 @@
   "id": "streamchatbridge",
   "version": "${version}",
   "name": "Stream Chat Bridge",
-  "description": "This is an example description! Tell everyone what your mod is about!",
+  "description": "A client-side Fabric mod that bridges Minecraft chat with Twitch and Kick.",
   "authors": [
-    "Me!"
+    "Kryp Arnold"
   ],
   "contact": {
-    "homepage": "https://fabricmc.net/",
-    "sources": "https://github.com/FabricMC/fabric-example-mod"
+    "homepage": "https://github.com/emirhanpisgin/stream-chat-bridge",
+    "sources": "https://github.com/emirhanpisgin/stream-chat-bridge",
+    "issues": "https://github.com/emirhanpisgin/stream-chat-bridge/issues"
   },
-  "license": "CC0-1.0",
+  "license": "MIT",
   "icon": "assets/streamchatbridge/icon.png",
   "environment": "*",
   "entrypoints": {

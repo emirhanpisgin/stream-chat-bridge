@@ -48,7 +48,10 @@ public final class StreamChatCommands {
                                     return 1;
                                 })
 
-                                .then(ClientCommands.argument("channel", StringArgumentType.word()).executes(context -> {
+                                .then(ClientCommands.argument("channel", StringArgumentType.word()).suggests((context, builder) -> {
+                                    builder.suggest("self");
+                                    return builder.buildFuture();
+                                }).executes(context -> {
                                     watchTwitch(StringArgumentType.getString(context, "channel"));
 
                                     return 1;
@@ -61,7 +64,10 @@ public final class StreamChatCommands {
                                     return 1;
                                 })
 
-                                .then(ClientCommands.argument("channel", StringArgumentType.word()).executes(context -> {
+                                .then(ClientCommands.argument("channel", StringArgumentType.word()).suggests((context, builder) -> {
+                                    builder.suggest("self");
+                                    return builder.buildFuture();
+                                }).executes(context -> {
                                     watchKick(StringArgumentType.getString(context, "channel"));
 
                                     return 1;

@@ -27,10 +27,13 @@ public final class TwitchSettingsScreen extends Screen {
 
     private Button sendToggleButton;
     private Button colorButton;
+    private Button saveButton;
 
     private int selectedColorIndex = 16;
 
     private String statusMessage = "";
+
+    private boolean channelChangeInProgress;
 
     public TwitchSettingsScreen(Screen parent) {
         super(Component.literal("Twitch Settings"));
@@ -108,11 +111,13 @@ public final class TwitchSettingsScreen extends Screen {
             release(button);
         }).bounds(left, 285, contentWidth, 20).build());
 
-        addRenderableWidget(Button.builder(Component.literal("Save"), button -> {
+        saveButton = addRenderableWidget(Button.builder(Component.literal("Save"), button -> {
             save();
 
             release(button);
         }).bounds(left, 320, 195, 20).build());
+
+        saveButton.active = !channelChangeInProgress;
 
         addRenderableWidget(Button.builder(Component.literal("Back"), button -> {
             save();
@@ -157,13 +162,15 @@ public final class TwitchSettingsScreen extends Screen {
     }
 
     private void save() {
+        if (channelChangeInProgress) {
+            return;
+        }
+
         ModConfig config = ConfigManager.get();
 
-        String oldChannel = config.twitchChannel == null ? "" : config.twitchChannel.trim();
+        String oldChannel = normalizeChannel(config.twitchChannel);
 
-        String newChannel = channelField.getValue().trim();
-
-        config.twitchChannel = newChannel;
+        String newChannel = normalizeChannel(channelField.getValue());
 
         config.twitchOutgoingPrefix = prefixField.getValue();
 
@@ -171,13 +178,37 @@ public final class TwitchSettingsScreen extends Screen {
 
         config.twitchIncomingMessageFormat = formatField.getValue().isBlank() ? MinecraftChatBridge.TWITCH_DEFAULT_FORMAT : formatField.getValue();
 
+        if (oldChannel.equalsIgnoreCase(newChannel)) {
+            config.twitchChannel = newChannel;
+
+            ConfigManager.save();
+
+            statusMessage = "Saved";
+
+            return;
+        }
+
+        TwitchAuth auth = StreamChatBridgeClient.getTwitchAuth();
+
+        if (!auth.isAuthenticated()) {
+            config.twitchChannel = newChannel;
+
+            ConfigManager.save();
+
+            statusMessage = "Saved";
+
+            return;
+        }
+
+        /*
+         * Keep the last valid channel in the config until Twitch confirms
+         * that the requested channel exists.
+         */
+        config.twitchChannel = oldChannel;
+
         ConfigManager.save();
 
-        statusMessage = "Saved";
-
-        if (!oldChannel.equalsIgnoreCase(newChannel)) {
-            applyChannel(newChannel);
-        }
+        applyChannel(newChannel);
     }
 
     private void applyChannel(String channel) {
@@ -185,6 +216,12 @@ public final class TwitchSettingsScreen extends Screen {
 
         if (!auth.isAuthenticated()) {
             return;
+        }
+
+        channelChangeInProgress = true;
+
+        if (saveButton != null) {
+            saveButton.active = false;
         }
 
         statusMessage = "Changing channel...";
@@ -206,8 +243,28 @@ public final class TwitchSettingsScreen extends Screen {
 
             eventSub.connect();
 
+            ModConfig config = ConfigManager.get();
+
+            config.twitchChannel = normalizeChannel(channel);
+
+            ConfigManager.save();
+
             setStatus("Saved");
         });
+    }
+
+    private String normalizeChannel(String channel) {
+        if (channel == null) {
+            return "";
+        }
+
+        String normalized = channel.trim();
+
+        if (normalized.startsWith("@")) {
+            normalized = normalized.substring(1);
+        }
+
+        return normalized.trim();
     }
 
     private Component previewComponent() {
@@ -231,7 +288,14 @@ public final class TwitchSettingsScreen extends Screen {
             return;
         }
 
-        minecraft.execute(() -> statusMessage = message);
+        minecraft.execute(() -> {
+            statusMessage = message;
+            channelChangeInProgress = false;
+
+            if (saveButton != null) {
+                saveButton.active = true;
+            }
+        });
     }
 
     @Override
